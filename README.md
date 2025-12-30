@@ -129,10 +129,8 @@ Currently since the agent uses market orders (which will be cancelled if not fil
 <h3>
   Agent benchmarks
 </h3>
-A benchmark to measure performance of agents and their interactions with the orderbook is available and measures at increasing numbers of each type of agent:
 
-  - **> 3'000'000** actions per second
-  - Stable across 3x16 all the way to 3x256 agents.
+A benchmark to measure performance of agents and their interactions with the orderbook is available and measures at increasing numbers of each type of agent, currently in single-digit millions of actions per second.
   
 <h3>
   Benchmarking information
@@ -146,6 +144,7 @@ All benchmarks were run on the following system:
 <h2>
   Further improvements
 </h2>
+- The benchmark for Agent latency is currently very noisy
 
 - Agents always use fixed order sizes. With more complex agents we could have varying volumes that an agent might submit at any one time.
 
