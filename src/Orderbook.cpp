@@ -274,14 +274,14 @@ void Orderbook::PrintBook() {
     while (orderIndex != -1) {
       Order *order = orderPool_->get_order(orderIndex);
       quantity += order->GetRemainingQuantity();
-      orderIndex = order->GetNext();
+      orderIndex = order->GetPrev();
     }
     std::ostringstream price;
     price << "£" << std::fixed << std::setprecision(2) << IndexToPrice(level);
 
     std::cout << std::right << std::setw(5) << quantity << " @ "
               << std::setw(10) << price.str() << ": ";
-    for (size_t j = 0; j < quantity / 100; ++j) {
+    for (size_t j = 0; j < quantity / 250; ++j) {
       std::cout << "█";
     }
     std::cout << '\n';
@@ -304,14 +304,14 @@ void Orderbook::PrintBook() {
     while (orderIndex != -1) {
       Order *order = orderPool_->get_order(orderIndex);
       quantity += order->GetRemainingQuantity();
-      orderIndex = order->GetNext();
+      orderIndex = order->GetPrev();
     }
     std::ostringstream price;
     price << "£" << std::fixed << std::setprecision(2) << IndexToPrice(level);
 
     std::cout << std::right << std::setw(5) << quantity << " @ "
               << std::setw(10) << price.str() << ": ";
-    for (size_t j = 0; j < quantity / 100; ++j) {
+    for (size_t j = 0; j < quantity / 250; ++j) {
       std::cout << "█";
     }
     std::cout << '\n';

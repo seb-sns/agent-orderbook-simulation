@@ -23,7 +23,7 @@ struct AgentInfo {
 class Agent {
 public:
   Agent(TradeDispatcher &tradeDispatcher, MatchingEngine &matchingEngine,
-        AgentStrategy strategy, ClientRef clientRef, double rate);
+        AgentStrategy &&strategy, ClientRef clientRef, double rate);
   ~Agent();
 
   OrderPtrs Act();

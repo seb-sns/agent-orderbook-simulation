@@ -126,12 +126,13 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
   if (!bestBidIndex || !bestAskIndex) {
     return OrderPtrs{};
   }
-  double midPrice = (orderbook_->IndexToPrice(*bestAskIndex) +
+  const double midPrice = (orderbook_->IndexToPrice(*bestAskIndex) +
                      orderbook_->IndexToPrice(*bestBidIndex)) /
                     2;
 
-  shortTermObservations_.push_back(std::move(midPrice));
-  longTermObservations_.push_back(std::move(midPrice));
+  shortTermObservations_.Push(midPrice);
+  longTermObservations_.Push(midPrice);
+
   if (!shortTermObservations_.full()) {
     return OrderPtrs{};
   }
@@ -140,13 +141,13 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
     return OrderPtrs{};
   }
   double shortTermLeavingObs{0};
-  shortTermObservations_.pop_front(shortTermLeavingObs);
+  shortTermObservations_.Pop(shortTermLeavingObs);
   shortTermSum_ += (midPrice - shortTermLeavingObs);
   double shortTermMovingAverage_ =
       shortTermSum_ / shortTermObservations_.size();
 
   double longTermLeavingObs{0};
-  longTermObservations_.pop_front(longTermLeavingObs);
+  longTermObservations_.Pop(longTermLeavingObs);
   longTermSum_ += (midPrice - longTermLeavingObs);
   double longTermMovingAverage_ = longTermSum_ / longTermObservations_.size();
 

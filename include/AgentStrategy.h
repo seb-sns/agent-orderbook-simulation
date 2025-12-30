@@ -1,8 +1,8 @@
 #pragma once
 
-#include "FixedDeque.h"
 #include "OrderPool.h"
 #include "Orderbook.h"
+#include "SingleThreadRingBuffer.h"
 #include <random>
 #include <variant>
 
@@ -19,6 +19,13 @@ using OrderPtrs = std::vector<Order *>;
 class MarketMaker {
 public:
   MarketMaker(Orderbook *orderbook, OrderPool *orderPool, double spread);
+
+  MarketMaker(const MarketMaker&) = delete;
+  MarketMaker& operator=(const MarketMaker&) = delete;
+
+  MarketMaker(MarketMaker&&) = default;
+  MarketMaker& operator=(MarketMaker&&) = default;
+
   OrderPtrs Act(Agent *agent);
   OrderPtrs CreateOrders(Agent *agent);
   OrderPtrs CancelOrders(Agent *agent);
@@ -34,13 +41,20 @@ private:
 class MomentumTrader {
 public:
   MomentumTrader(Orderbook *orderbook, OrderPool *orderPool, double threshold);
+
+  MomentumTrader(const MomentumTrader&) = delete;
+  MomentumTrader& operator=(const MomentumTrader&) = delete;
+
+  MomentumTrader(MomentumTrader&&) = default;
+  MomentumTrader& operator=(MomentumTrader&&) = default;
+
   OrderPtrs Act(Agent *agent);
   OrderPtrs CreateOrders(Agent *agent);
   OrderPtrs CancelOrders(Agent *agent);
 
 private:
-  FixedDeque<double> longTermObservations_{256};
-  FixedDeque<double> shortTermObservations_{32};
+  SingleThreadRingBuffer<double, 256> longTermObservations_;
+  SingleThreadRingBuffer<double, 32> shortTermObservations_;
 
   double shortTermSum_{0};
   double longTermSum_{0};
@@ -52,6 +66,13 @@ private:
 class Random {
 public:
   Random(Orderbook *orderbook, OrderPool *orderPool, double sigma);
+
+  Random(const Random&) = delete;
+  Random& operator=(const Random&) = delete;
+
+  Random(Random&&) = default;
+  Random& operator=(Random&&) = default;
+
   OrderPtrs Act(Agent *agent);
   OrderPtrs CreateOrders(Agent *agent);
   OrderPtrs CancelOrders(Agent *agent);

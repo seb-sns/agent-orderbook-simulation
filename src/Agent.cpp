@@ -24,8 +24,8 @@ double sampleExponential(double rate) {
 }
 
 Agent::Agent(TradeDispatcher &tradeDispatcher, MatchingEngine &matchingEngine,
-             AgentStrategy strategy, ClientRef clientRef, double rate)
-    : strategy_(strategy), clientRef_(clientRef), rate_(rate),
+             AgentStrategy &&strategy, ClientRef clientRef, double rate)
+    : strategy_(std::move(strategy)), clientRef_(clientRef), rate_(rate),
       matchingEngine_(matchingEngine), tradeDispatcher_(tradeDispatcher) {
   tradeDispatcher_.Attach(this);
 };
@@ -53,7 +53,7 @@ Agent::GetActiveOrders() const {
 
 OrderPtrs Agent::Act() {
   return std::visit(
-      [&](auto activeStrategy) { return activeStrategy.Act(this); }, strategy_);
+      [&](auto& activeStrategy) { return activeStrategy.Act(this); }, strategy_);
 }
 
 double Agent::ScheduleNextAction(std::uint64_t currentTime) {

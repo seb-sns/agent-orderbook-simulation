@@ -1,6 +1,7 @@
 #include "Agent.h"
 #include "AgentManager.h"
 #include "AgentStrategy.h"
+#include "AgentStrategyFactory.h"
 #include "OrderPool.h"
 #include "Orderbook.h"
 #include "TradeDispatcher.h"
@@ -91,24 +92,20 @@ int main() {
 
   AgentManager agentManager_(maxTime);
 
-  Random random(&orderbook, &orderPool, sigma);
-  MarketMaker marketMaker(&orderbook, &orderPool, 0.02);
-  MomentumTrader momentumTrader(&orderbook, &orderPool, 0.05);
-
   for (size_t i = 0; i < nRandom; ++i) {
     agentManager_.AddAgent(std::make_unique<Agent>(
-        tradeDispatcher, matchingEngine, random, i, randomRate));
+        tradeDispatcher, matchingEngine, MakeStrategyRandom(&orderbook, &orderPool, sigma), i, randomRate));
   }
 
   for (size_t i = 0; i < nMarketMaker; ++i) {
     agentManager_.AddAgent(
-        std::make_unique<Agent>(tradeDispatcher, matchingEngine, marketMaker,
+        std::make_unique<Agent>(tradeDispatcher, matchingEngine, MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02),
                                 i + nRandom, marketMakerRate));
   }
 
   for (size_t i = 0; i < nMomentumTrader; ++i) {
     agentManager_.AddAgent(std::make_unique<Agent>(
-        tradeDispatcher, matchingEngine, momentumTrader,
+        tradeDispatcher, matchingEngine, MakeStrategyMomentumTrader(&orderbook, &orderPool, 0.005),
         i + (nRandom + nMarketMaker), momentumTraderRate));
   }
 
@@ -134,3 +131,19 @@ int main() {
   agentManager_.PrintSummary();
   return 0;
 }
+
+  // 
+ 
+
+
+  // 
+ 
+ 
+
+  // 
+ 
+
+
+  // 
+ 
+ 

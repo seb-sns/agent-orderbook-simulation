@@ -21,6 +21,7 @@ private:
 
 public:
   bool Push(T &&item);
+  bool Push(const T &item);
   bool Pop(T &item);
   size_t size() const;
   bool empty() const;
@@ -37,6 +38,19 @@ template <typename T, std::size_t n> bool RingBuffer<T, n>::Push(T &&item) {
   }
 
   buffer_[current_head] = std::move(item);
+  head_.store(next_head, std::memory_order_release);
+  return true;
+}
+
+template <typename T, std::size_t n>
+bool RingBuffer<T, n>::Push(const T &item) {
+  size_t current_head = head_.load(std::memory_order_relaxed);
+  size_t next_head = (current_head + 1) & (n - 1);
+  if (next_head == tail_.load(std::memory_order_acquire)) {
+    return false;
+  }
+
+  buffer_[current_head] = item;
   head_.store(next_head, std::memory_order_release);
   return true;
 }

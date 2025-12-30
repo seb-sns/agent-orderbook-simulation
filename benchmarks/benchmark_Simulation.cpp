@@ -1,6 +1,7 @@
 #include "Agent.h"
 #include "AgentManager.h"
 #include "AgentStrategy.h"
+#include "AgentStrategyFactory.h"
 #include "Orderbook.h"
 #include "TradeDispatcher.h"
 
@@ -15,7 +16,7 @@ static void BM_Simulation(benchmark::State &state) {
     OrderPool orderPool;
     Orderbook orderbook(&orderPool, tradeDispatcher);
     MatchingEngine matchingEngine(orderbook, &orderPool);
-    std::uint64_t maxTime{5000};
+    std::uint64_t maxTime{100'000};
     AgentManager agentManager_(maxTime);
     size_t nRandom = state.range(0);
     size_t nMarketMaker = state.range(0);
@@ -26,20 +27,21 @@ static void BM_Simulation(benchmark::State &state) {
     for (size_t i = 0; i < nRandom; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          Random(&orderbook, &orderPool, 1), i, randomRate));
+          MakeStrategyRandom(&orderbook, &orderPool, 1),
+          i + (nRandom + nMarketMaker), momentumTraderRate));
     }
 
     for (size_t i = 0; i < nMarketMaker; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MarketMaker(&orderbook, &orderPool, 0.02),
-          i + nRandom, marketMakerRate));
+          MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02),
+          i + (nRandom + nMarketMaker), momentumTraderRate));
     }
 
     for (size_t i = 0; i < nMomentumTrader; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MomentumTrader(&orderbook, &orderPool, 0.05),
+          MakeStrategyMomentumTrader(&orderbook, &orderPool, 0.005),
           i + (nRandom + nMarketMaker), momentumTraderRate));
     }
 

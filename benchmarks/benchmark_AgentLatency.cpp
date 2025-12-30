@@ -1,6 +1,7 @@
 #include "Agent.h"
 #include "AgentManager.h"
 #include "AgentStrategy.h"
+#include "AgentStrategyFactory.h"
 #include "OrderPool.h"
 #include "Orderbook.h"
 #include "TradeDispatcher.h"
@@ -30,21 +31,22 @@ int main() {
 
     for (size_t i = 0; i < nRandom; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
-          tradeDispatcher, matchingEngine, Random(&orderbook, &orderPool, 0.5),
-          i, randomRate));
+          tradeDispatcher, matchingEngine,
+          MakeStrategyRandom(&orderbook, &orderPool, 1),
+          i + (nRandom + nMarketMaker), momentumTraderRate));
     }
 
     for (size_t i = 0; i < nMarketMaker; ++i) {
-      agentManager_.AddAgent(
-          std::make_unique<Agent>(tradeDispatcher, matchingEngine,
-                                  MarketMaker(&orderbook, &orderPool, 0.02),
-                                  i + nRandom, marketMakerRate));
+      agentManager_.AddAgent(std::make_unique<Agent>(
+          tradeDispatcher, matchingEngine,
+          MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02),
+          i + (nRandom + nMarketMaker), momentumTraderRate));
     }
 
     for (size_t i = 0; i < nMomentumTrader; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MomentumTrader(&orderbook, &orderPool, 0.005),
+          MakeStrategyMomentumTrader(&orderbook, &orderPool, 0.005),
           i + (nRandom + nMarketMaker), momentumTraderRate));
     }
 
