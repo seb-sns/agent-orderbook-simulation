@@ -6,6 +6,10 @@
   A high-performance C++ simulation, designed to explore low-latency orderbook design, agent interactions, and multithreading.
 </p>
 
+<p align="center">
+  <img src="images/orderbook.png">
+</p>
+
 <h2>
   Key Features
 </h2>
@@ -14,7 +18,7 @@
   - Multithreaded simulation architecture
   - L3 FIFO orderbook with O(1) best bid/ask lookup
   - Custom order pool to minimize allocations
-  - Benchmarked at ~8M ops/sec with sub-100ns median latency
+  - Benchmarked at ~8.5M ops/sec with sub-100ns median latency
 
 <h2>
   Introduction
@@ -87,10 +91,14 @@ This is an L3 implimentation of an orderbook, where we store individual orders a
 </h3>
 
 When benchmarking 5'000'000 limit orders with an additional ~250'000 order cancellations the orderbook achieves:
-  - **8'000'000 operations per second**
+  - **~8.5M operations per second**
   - **median latency of ~74ns**
-  - **average latency of ~104ns**
-  - **99.99% percentile orders at ~12'500ns**
+  - **average latency of ~100ns**
+  - **99.99% percentile orders at ~11'000ns**
+
+<p align="center">
+  <img src="images/orderlatency.png">
+</p>
 
 <h2>
   Agent design
@@ -115,7 +123,7 @@ If the current mid-price has grown outside some range from the previous mid-pric
 <h3>
   Momentum Trader agents
 </h3>
-Momentum Traders use a fixed sized deque to keep track of both a short term and long term moving average.
+Momentum Traders use a ring buffer to keep track of both a short term and long term moving average.
 When the difference between the two crosses some threshold, the agent will place market buy or sell orders depending on if the the trend is up or down.
 Currently since the agent uses market orders (which will be cancelled if not filled). The Momentum Trader has no pressing need for cancel order logic.
 <h3>
