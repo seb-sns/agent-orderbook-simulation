@@ -10,12 +10,13 @@
 
 MarketMaker::MarketMaker(Orderbook *orderbook, OrderPool *orderPool,
                          double spread)
-    : orderbook_(orderbook), orderPool_(orderPool), spread_(spread) {};
+    : orderbook_(orderbook), orderPool_(orderPool), spread_(spread),
+      midPrice_(0), lastMidPrice_(0) {};
 
 OrderPtrs MarketMaker::Act(Agent *agent) {
   OrderPtrs orders{};
-  OrderPtrs cancelOrders{CancelOrders(agent)};
   OrderPtrs activeOrders{CreateOrders(agent)};
+  OrderPtrs cancelOrders{CancelOrders(agent)};
   orders.insert(orders.end(), activeOrders.begin(), activeOrders.end());
   orders.insert(orders.end(), cancelOrders.begin(), cancelOrders.end());
   return orders;
@@ -47,7 +48,7 @@ OrderPtrs MarketMaker::CreateOrders(Agent *agent) {
     Order *sellOrder = orderPool_->get_order(sellSideSlot);
     sellOrder->SetOrderId(0);
     sellOrder->SetOrderType(OrderType::LIMIT);
-    sellOrder->GetClientRef(agent->GetClientRef());
+    sellOrder->SetClientRef(agent->GetClientRef());
     sellOrder->SetSide(Side::Sell);
     sellOrder->SetPrice(askPrice);
     sellOrder->SetInitialQuantity(10);
@@ -58,7 +59,7 @@ OrderPtrs MarketMaker::CreateOrders(Agent *agent) {
     Order *buyOrder = orderPool_->get_order(buySideSlot);
     buyOrder->SetOrderId(0);
     buyOrder->SetOrderType(OrderType::LIMIT);
-    buyOrder->GetClientRef(agent->GetClientRef());
+    buyOrder->SetClientRef(agent->GetClientRef());
     buyOrder->SetSide(Side::Buy);
     buyOrder->SetPrice(bidPrice);
     buyOrder->SetInitialQuantity(10);
@@ -77,8 +78,8 @@ OrderPtrs MarketMaker::CancelOrders(Agent *agent) {
   if (std::abs(midPrice_ - lastMidPrice_) <= spread_) {
     return OrderPtrs{};
   }
+
   OrderPtrs orders{};
-  std::vector<PoolIndex> ordersToCancel{};
   const auto activeOrders = agent->GetActiveOrders();
   for (const auto &[_, order] : activeOrders) {
     if (std::abs(order->GetPrice() - midPrice_) <= spread_ * 2) {
@@ -88,19 +89,14 @@ OrderPtrs MarketMaker::CancelOrders(Agent *agent) {
     Order *cancelOrder = orderPool_->get_order(slot);
     cancelOrder->SetOrderId(order->GetOrderId());
     cancelOrder->SetOrderType(OrderType::CANCEL);
-    cancelOrder->GetClientRef(agent->GetClientRef());
+    cancelOrder->SetClientRef(agent->GetClientRef());
     cancelOrder->SetSide(order->GetSide());
     cancelOrder->SetPrice(order->GetPrice());
     cancelOrder->SetInitialQuantity(0);
     cancelOrder->SetRemainingQuantity(0);
     cancelOrder->SetIndex(slot);
 
-    ordersToCancel.push_back(order->GetIndex());
     orders.push_back(cancelOrder);
-  }
-
-  for (const auto &slotIndex : ordersToCancel) {
-    agent->RemoveActiveOrder(slotIndex);
   }
 
   return orders;
@@ -127,11 +123,24 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
     return OrderPtrs{};
   }
   const double midPrice = (orderbook_->IndexToPrice(*bestAskIndex) +
-                     orderbook_->IndexToPrice(*bestBidIndex)) /
-                    2;
+                           orderbook_->IndexToPrice(*bestBidIndex)) /
+                          2;
 
+  if (shortTermObservations_.full()) {
+    double shortTermLeavingObs{0};
+    shortTermObservations_.Pop(shortTermLeavingObs);
+    shortTermSum_ -= shortTermLeavingObs;
+  }
   shortTermObservations_.Push(midPrice);
+  shortTermSum_ += midPrice;
+
+  if (longTermObservations_.full()) {
+    double longTermLeavingObs{0};
+    longTermObservations_.Pop(longTermLeavingObs);
+    longTermSum_ -= longTermLeavingObs;
+  }
   longTermObservations_.Push(midPrice);
+  longTermSum_ += midPrice;
 
   if (!shortTermObservations_.full()) {
     return OrderPtrs{};
@@ -140,29 +149,21 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
   if (!longTermObservations_.full()) {
     return OrderPtrs{};
   }
-  double shortTermLeavingObs{0};
-  shortTermObservations_.Pop(shortTermLeavingObs);
-  shortTermSum_ += (midPrice - shortTermLeavingObs);
+
   double shortTermMovingAverage_ =
       shortTermSum_ / shortTermObservations_.size();
-
-  double longTermLeavingObs{0};
-  longTermObservations_.Pop(longTermLeavingObs);
-  longTermSum_ += (midPrice - longTermLeavingObs);
   double longTermMovingAverage_ = longTermSum_ / longTermObservations_.size();
 
   OrderPtrs orders{};
   // Check the we have the maximum amount that could be required
   if (((agent->GetAvailableCash() / 100.0) > (10 * 120)) &&
-      threshold_ <
-          shortTermMovingAverage_ -
-              longTermMovingAverage_) {
+      threshold_ < shortTermMovingAverage_ - longTermMovingAverage_) {
 
     PoolIndex slot = orderPool_->allocate();
     Order *order = orderPool_->get_order(slot);
     order->SetOrderId(0);
     order->SetOrderType(OrderType::MARKET);
-    order->GetClientRef(agent->GetClientRef());
+    order->SetClientRef(agent->GetClientRef());
     order->SetSide(Side::Buy);
     order->SetPrice(120);
     order->SetInitialQuantity(10);
@@ -177,7 +178,7 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
     Order *order = orderPool_->get_order(slot);
     order->SetOrderId(0);
     order->SetOrderType(OrderType::MARKET);
-    order->GetClientRef(agent->GetClientRef());
+    order->SetClientRef(agent->GetClientRef());
     order->SetSide(Side::Sell);
     order->SetPrice(100);
     order->SetInitialQuantity(10);
@@ -190,9 +191,9 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
 }
 
 OrderPtrs MomentumTrader::CancelOrders(Agent *agent) {
-  // TO-DO
-  // Currently MomentumTrader only places Market orders which will be cancelled if they can't find a match
-  // Thus, there are no 'active orders' waiting to be filled/cancelled from the MomentumTrader
+  // Places Market orders which will be cancelled if they can't find a match
+  // Thus, there are no 'active orders' waiting to be filled/cancelled from the
+  // MomentumTrader
   return OrderPtrs{};
 }
 
@@ -237,12 +238,12 @@ OrderPtrs Random::CreateOrders(Agent *agent) {
   Side side;
   if (side_result) {
     side = Side::Buy;
-    if (agent->GetAvailableCash() / 100.0 < price) {
+    if (agent->GetAvailableCash() / 100.0 < price * quantity) {
       return OrderPtrs{};
     }
   } else {
     side = Side::Sell;
-    if (agent->GetUnits() < 1) {
+    if (agent->GetUnits() < quantity) {
       return OrderPtrs{};
     }
   }
@@ -251,7 +252,7 @@ OrderPtrs Random::CreateOrders(Agent *agent) {
   Order *order = orderPool_->get_order(slot);
   order->SetOrderId(0);
   order->SetOrderType(OrderType::LIMIT);
-  order->GetClientRef(agent->GetClientRef());
+  order->SetClientRef(agent->GetClientRef());
   order->SetSide(side);
   order->SetPrice(price);
   order->SetInitialQuantity(10);
@@ -265,7 +266,6 @@ OrderPtrs Random::CancelOrders(Agent *agent) {
     return OrderPtrs{};
   }
   OrderPtrs orders{};
-  std::vector<PoolIndex> ordersToCancel{};
   const auto activeOrders = agent->GetActiveOrders();
   for (const auto &[_, order] : activeOrders) {
     if (cancelDist(gen)) {
@@ -273,21 +273,15 @@ OrderPtrs Random::CancelOrders(Agent *agent) {
       Order *cancelOrder = orderPool_->get_order(slot);
       cancelOrder->SetOrderId(order->GetOrderId());
       cancelOrder->SetOrderType(OrderType::CANCEL);
-      cancelOrder->GetClientRef(agent->GetClientRef());
+      cancelOrder->SetClientRef(agent->GetClientRef());
       cancelOrder->SetSide(order->GetSide());
       cancelOrder->SetPrice(order->GetPrice());
       cancelOrder->SetInitialQuantity(0);
       cancelOrder->SetRemainingQuantity(0);
       cancelOrder->SetIndex(slot);
 
-      ordersToCancel.push_back(order->GetIndex());
       orders.push_back(cancelOrder);
     }
   }
-
-  for (const auto &slotIndex : ordersToCancel) {
-    agent->RemoveActiveOrder(slotIndex);
-  }
-
   return orders;
 }

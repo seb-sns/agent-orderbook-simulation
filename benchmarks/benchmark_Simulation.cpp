@@ -27,15 +27,14 @@ static void BM_Simulation(benchmark::State &state) {
     for (size_t i = 0; i < nRandom; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MakeStrategyRandom(&orderbook, &orderPool, 1),
-          i + (nRandom + nMarketMaker), momentumTraderRate));
+          MakeStrategyRandom(&orderbook, &orderPool, 1), i, randomRate));
     }
 
     for (size_t i = 0; i < nMarketMaker; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02),
-          i + (nRandom + nMarketMaker), momentumTraderRate));
+          MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02), i + nRandom,
+          marketMakerRate));
     }
 
     for (size_t i = 0; i < nMomentumTrader; ++i) {

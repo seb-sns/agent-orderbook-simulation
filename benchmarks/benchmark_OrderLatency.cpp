@@ -37,7 +37,7 @@ int main() {
         Order *cancelOrder = orderPool.get_order(index);
         cancelOrder->SetOrderId(i);
         cancelOrder->SetOrderType(OrderType::CANCEL);
-        cancelOrder->GetClientRef(0);
+        cancelOrder->SetClientRef(0);
         cancelOrder->SetSide(selectedOrder->GetSide());
         cancelOrder->SetPrice(selectedOrder->GetPrice());
         cancelOrder->SetInitialQuantity(0);
@@ -68,7 +68,7 @@ int main() {
       Order *order = orderPool.get_order(index);
       order->SetOrderId(i);
       order->SetOrderType(orderType);
-      order->GetClientRef(0);
+      order->SetClientRef(0);
       order->SetSide(side);
       order->SetPrice(price);
       order->SetInitialQuantity(quantity);

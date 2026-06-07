@@ -45,15 +45,15 @@ void Agent::RemoveActiveOrder(PoolIndex index) {
   activeOrders_.erase(index);
 }
 
-std::unordered_map<PoolIndex, Order *>
-Agent::GetActiveOrders() const {
+std::unordered_map<PoolIndex, Order *> Agent::GetActiveOrders() const {
   std::shared_lock<std::shared_mutex> lock(mtx_);
   return activeOrders_;
 }
 
 OrderPtrs Agent::Act() {
   return std::visit(
-      [&](auto& activeStrategy) { return activeStrategy.Act(this); }, strategy_);
+      [&](auto &activeStrategy) { return activeStrategy.Act(this); },
+      strategy_);
 }
 
 double Agent::ScheduleNextAction(std::uint64_t currentTime) {
@@ -73,8 +73,7 @@ void Agent::PushOrder(Order *order) {
 void Agent::PushLimitOrder(Order *order) {
   AddActiveOrder(order->GetIndex(), order);
   if (order->GetSide() == Side::Sell) {
-    units_.fetch_sub(order->GetRemainingQuantity(),
-                     std::memory_order_relaxed);
+    units_.fetch_sub(order->GetRemainingQuantity(), std::memory_order_relaxed);
   } else {
     int64_t priceCents = static_cast<std::int64_t>(order->GetPrice() * 100);
     int64_t totalCents =
@@ -82,14 +81,14 @@ void Agent::PushLimitOrder(Order *order) {
     availableCash_.fetch_sub(totalCents, std::memory_order_relaxed);
     reservedCash_.fetch_add(totalCents, std::memory_order_relaxed);
   }
-  matchingEngine_.orders_.Push(std::move(order));
+  while (!matchingEngine_.orders_.Push(order)) {
+  }
 }
 
 void Agent::PushMarketOrder(Order *order) {
   AddActiveOrder(order->GetIndex(), order);
   if (order->GetSide() == Side::Sell) {
-    units_.fetch_sub(order->GetRemainingQuantity(),
-                     std::memory_order_relaxed);
+    units_.fetch_sub(order->GetRemainingQuantity(), std::memory_order_relaxed);
   } else {
     int64_t priceCents = static_cast<std::int64_t>(order->GetPrice() * 100);
     int64_t totalCents =
@@ -97,22 +96,26 @@ void Agent::PushMarketOrder(Order *order) {
     availableCash_.fetch_sub(totalCents, std::memory_order_relaxed);
     reservedCash_.fetch_add(totalCents, std::memory_order_relaxed);
   }
-  matchingEngine_.orders_.Push(std::move(order));
+  while (!matchingEngine_.orders_.Push(order)) {
+  }
 }
 
-void Agent::PushCancelOrder(Order* order) {
-  matchingEngine_.orders_.Push(std::move(order));
+void Agent::PushCancelOrder(Order *order) {
+  while (!matchingEngine_.orders_.Push(order)) {
+  }
 }
 
 void Agent::PushTrade(TradeInfo &&tradeInfo) {
-  incomingBuffer_.Push(std::move(tradeInfo));
+  while (!incomingBuffer_.Push(std::move(tradeInfo))) {
+  }
 }
 
 void Agent::PopTrade() {
   TradeInfo tradeInfo;
   if (incomingBuffer_.Pop(tradeInfo)) {
-    if (tradeInfo.type == ExecutionType::FULL || tradeInfo.type == ExecutionType::CANCEL) {
-      RemoveActiveOrder(tradeInfo.order.GetOrderId());
+    if (tradeInfo.type == ExecutionType::FULL ||
+        tradeInfo.type == ExecutionType::CANCEL) {
+      RemoveActiveOrder(tradeInfo.order.GetIndex());
     }
     if (tradeInfo.type == ExecutionType::CANCEL) {
       PopCancelOrderTrade(tradeInfo);
@@ -170,8 +173,7 @@ void Agent::PopCancelOrderTrade(TradeInfo &tradeInfo) {
   if (tradeInfo.side == Side::Sell) {
     units_.fetch_add(tradeInfo.quantity, std::memory_order_relaxed);
   } else {
-    int64_t reservedPrice =
-        static_cast<std::int64_t>(tradeInfo.price * 100);
+    int64_t reservedPrice = static_cast<std::int64_t>(tradeInfo.price * 100);
     int64_t reservedCents =
         static_cast<std::int64_t>(reservedPrice * tradeInfo.quantity);
     reservedCash_.fetch_sub(reservedCents, std::memory_order_relaxed);

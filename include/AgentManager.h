@@ -1,19 +1,10 @@
 #pragma once
 #include "Agent.h"
 #include "AgentStrategy.h"
-#include "CalenderQueue.h"
+#include "LadderQueue.h"
 #include <atomic>
 #include <memory>
 #include <vector>
-
-struct AgentEvent {
-  double time;
-  size_t pos;
-
-  bool operator<(const AgentEvent &otherEvent) const {
-    return time > otherEvent.time;
-  }
-};
 
 constexpr inline auto accessor = [](const AgentEvent &event) {
   return event.time;
@@ -41,5 +32,5 @@ public:
   std::uint64_t maxTime_;
   std::uint64_t agentActions_{0};
   std::vector<std::unique_ptr<Agent>> agents_;
-  CalenderQueue<AgentEvent, 1024, decltype(accessor)> agentEventQueue_;
+  LadderQueue agentEventQueue_;
 };

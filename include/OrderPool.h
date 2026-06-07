@@ -31,7 +31,6 @@ public:
   };
 
   Order *get_order(PoolIndex index) {
-    std::lock_guard<std::mutex> lock(mtx_);
     return &orders_.at(index).order;
   }
 

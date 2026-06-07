@@ -16,56 +16,62 @@ Orderbook::Orderbook(OrderPool *orderPool, TradeDispatcher &tradeDispatcher)
 
 void Orderbook::setBidBit(const uint64_t index) {
   bids_bitmap_[index / 64] |= (1ULL << (index % 64));
-  if (bestBidIndex_ == INVALID_PRICE_LEVEL_INDEX || index > bestBidIndex_) {
-    bestBidIndex_ = index;
+  const uint64_t bestBidIndex = bestBidIndex_.load(std::memory_order_relaxed);
+  if (bestBidIndex == INVALID_PRICE_LEVEL_INDEX || index > bestBidIndex) {
+    bestBidIndex_.store(index, std::memory_order_relaxed);
   }
 }
 
 void Orderbook::setAskBit(const uint64_t index) {
   asks_bitmap_[index / 64] |= (1ULL << (index % 64));
-  if (bestAskIndex_ == INVALID_PRICE_LEVEL_INDEX || index < bestAskIndex_) {
-    bestAskIndex_ = index;
+  const uint64_t bestAskIndex = bestAskIndex_.load(std::memory_order_relaxed);
+  if (bestAskIndex == INVALID_PRICE_LEVEL_INDEX || index < bestAskIndex) {
+    bestAskIndex_.store(index, std::memory_order_relaxed);
   }
 }
 
 void Orderbook::clearBidBit(const uint64_t index) {
   bids_bitmap_[index / 64] &= ~(1ULL << (index % 64));
-  if (index == bestBidIndex_) {
+  if (index == bestBidIndex_.load(std::memory_order_relaxed)) {
     for (int i = BITMAP_SIZE - 1; i >= 0; --i) {
       if (bids_bitmap_[i] != 0) {
-        bestBidIndex_ = i * 64 + 63 - __builtin_clzll(bids_bitmap_[i]);
+        bestBidIndex_.store(i * 64 + 63 - __builtin_clzll(bids_bitmap_[i]),
+                            std::memory_order_relaxed);
         return;
       }
     }
-    bestBidIndex_ = INVALID_PRICE_LEVEL_INDEX;
+    bestBidIndex_.store(INVALID_PRICE_LEVEL_INDEX, std::memory_order_relaxed);
   }
 }
 
 void Orderbook::clearAskBit(const uint64_t index) {
   asks_bitmap_[index / 64] &= ~(1ULL << (index % 64));
-  if (index == bestAskIndex_) {
+  if (index == bestAskIndex_.load(std::memory_order_relaxed)) {
     for (uint64_t i = 0; i < BITMAP_SIZE; ++i) {
       if (asks_bitmap_[i] != 0) {
-        bestAskIndex_ = i * 64 + __builtin_ctzll(asks_bitmap_[i]);
+        bestAskIndex_.store(i * 64 + __builtin_ctzll(asks_bitmap_[i]),
+                            std::memory_order_relaxed);
         return;
       }
     }
-    bestAskIndex_ = INVALID_PRICE_LEVEL_INDEX;
+    bestAskIndex_.store(INVALID_PRICE_LEVEL_INDEX, std::memory_order_relaxed);
   }
 }
 
 std::optional<uint64_t> Orderbook::GetBestBid() {
-  if (bestBidIndex_ == INVALID_PRICE_LEVEL_INDEX) {
+  const uint64_t bestBidIndex = bestBidIndex_.load(std::memory_order_relaxed);
+  if (bestBidIndex == INVALID_PRICE_LEVEL_INDEX) {
     return std::nullopt;
   }
-  return bestBidIndex_;
+  return bestBidIndex;
 }
 
 std::optional<uint64_t> Orderbook::GetBestAsk() {
-  if (bestAskIndex_ == INVALID_PRICE_LEVEL_INDEX) {
+  const uint64_t bestAskIndex = bestAskIndex_.load(std::memory_order_relaxed);
+  if (bestAskIndex == INVALID_PRICE_LEVEL_INDEX) {
     return std::nullopt;
   }
-  return bestAskIndex_;
+  return bestAskIndex;
 }
 
 uint64_t Orderbook::PriceToIndex(Price price) const {
@@ -120,6 +126,10 @@ void Orderbook::AddOrder(Order *order) {
 }
 
 void Orderbook::RemoveOrder(Order *order) {
+  RemoveOrderUnlocked(order);
+}
+
+void Orderbook::RemoveOrderUnlocked(Order *order) {
   const uint64_t &index = PriceToIndex(order->GetPrice());
   auto &priceLevel =
       (order->GetSide() == Side::Buy) ? bids_[index] : asks_[index];
@@ -168,41 +178,27 @@ void Orderbook::CancelOrder(Order *cancelOrder) {
     // cancelOrder->GetOrderId() << std::endl;
     PoolIndex poolIndex = *ptr;
     Order *order = orderPool_->get_order(poolIndex);
-    TradeInfo bidTrade(order->GetOrderId(), order->GetOrderType(),
+    TradeInfo cancelledTrade(order->GetOrderId(), order->GetOrderType(),
                        order->GetClientRef(), Side::Buy, order->GetPrice(),
-                       order->GetRemainingQuantity(), *cancelOrder,
+                       order->GetRemainingQuantity(), *order,
                        ExecutionType::CANCEL);
-    TradeInfo askTrade(
-        cancelOrder->GetOrderId(), OrderType::CANCEL,
-        cancelOrder->GetClientRef(), Side::Sell, 110, 0, *cancelOrder,
-        ExecutionType::INVALID); // Maybe trades should be refactored for better
-                                 // integration with cancels?
-    Trade trade(askTrade, bidTrade);
-    tradeDispatcher_.PushTradeInfo(std::move(trade));
-    RemoveOrder(std::move(order));
+    tradeDispatcher_.PushTradeInfo(std::move(cancelledTrade));
+    RemoveOrderUnlocked(order);
   } else {
     auto &priceLevel = asks_[index];
     const PoolIndex *ptr = orderMap_.find(cancelOrder->GetOrderId());
     if (!ptr) {
       return;
     }
-    // std::cout << "[Orderbook CancelOrder] - OrderId: " <<
-    // cancelOrder->GetOrderId() << std::endl;
     PoolIndex poolIndex = *ptr;
 
     Order *order = orderPool_->get_order(poolIndex);
-    TradeInfo askTrade(order->GetOrderId(), order->GetOrderType(),
+    TradeInfo cancelledTrade(order->GetOrderId(), order->GetOrderType(),
                        order->GetClientRef(), Side::Sell, order->GetPrice(),
-                       order->GetRemainingQuantity(), *cancelOrder,
+                       order->GetRemainingQuantity(), *order,
                        ExecutionType::CANCEL);
-    TradeInfo bidTrade(
-        cancelOrder->GetOrderId(), OrderType::CANCEL,
-        cancelOrder->GetClientRef(), Side::Buy, 110, 0, *cancelOrder,
-        ExecutionType::INVALID); // Maybe trades should be refactored for better
-                                 // integration with cancels?
-    Trade trade(askTrade, bidTrade);
-    tradeDispatcher_.PushTradeInfo(std::move(trade));
-    RemoveOrder(std::move(order));
+    tradeDispatcher_.PushTradeInfo(std::move(cancelledTrade));
+    RemoveOrderUnlocked(order);
   }
 }
 
@@ -232,35 +228,35 @@ void Orderbook::FillOrder(Order *order, std::uint64_t index) {
   if (order->GetSide() == Side::Buy) {
     TradeInfo bidTrade(order->GetOrderId(), order->GetOrderType(),
                        order->GetClientRef(), Side::Buy,
-                       matchedOrder->GetPrice(), filledQuantity, *matchedOrder,
+                       matchedOrder->GetPrice(), filledQuantity, *order,
                        orderExecutionType);
     TradeInfo askTrade(matchedOrder->GetOrderId(), matchedOrder->GetOrderType(),
                        matchedOrder->GetClientRef(), Side::Sell,
-                       matchedOrder->GetPrice(), filledQuantity, *order,
+                       matchedOrder->GetPrice(), filledQuantity, *matchedOrder,
                        matchedOrderExecutionType);
     Trade trade(askTrade, bidTrade);
     tradeDispatcher_.PushTradeInfo(std::move(trade));
   } else {
     TradeInfo bidTrade(matchedOrder->GetOrderId(), matchedOrder->GetOrderType(),
                        matchedOrder->GetClientRef(), Side::Buy,
-                       matchedOrder->GetPrice(), filledQuantity, *order,
+                       matchedOrder->GetPrice(), filledQuantity, *matchedOrder,
                        matchedOrderExecutionType);
     TradeInfo askTrade(order->GetOrderId(), order->GetOrderType(),
                        order->GetClientRef(), Side::Sell,
-                       matchedOrder->GetPrice(), filledQuantity, *matchedOrder,
+                       matchedOrder->GetPrice(), filledQuantity, *order,
                        orderExecutionType);
     Trade trade(askTrade, bidTrade);
     tradeDispatcher_.PushTradeInfo(std::move(trade));
   }
 
   if (matchedOrder->isFilled()) {
-    RemoveOrder(std::move(matchedOrder));
+    RemoveOrderUnlocked(matchedOrder);
   }
 }
 
 void Orderbook::PrintBook() {
   std::cout << "\n====== ASKS ======\n";
-  for (size_t level = MAX_PRICE_LEVELS; level > 0; --level) {
+  for (size_t level = MAX_PRICE_LEVELS - 1; level > 0; --level) {
     size_t word = level / 64;
     size_t bit = level % 64;
 
@@ -289,7 +285,7 @@ void Orderbook::PrintBook() {
 
   std::cout << "\n====== BIDS ======\n";
 
-  for (size_t level = MAX_PRICE_LEVELS; level > 0; --level) {
+  for (size_t level = MAX_PRICE_LEVELS - 1; level > 0; --level) {
     size_t word = level / 64;
     size_t bit = level % 64;
 

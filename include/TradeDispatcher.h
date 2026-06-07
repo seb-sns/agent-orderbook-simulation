@@ -12,6 +12,7 @@ public:
   void Attach(Agent *agent);
   void Detach(Agent *agent);
   void PushTradeInfo(Trade &&trade);
+  void PushTradeInfo(TradeInfo &&tradeInfo);
 
 private:
   std::unordered_map<ClientRef, Agent *> clients_;

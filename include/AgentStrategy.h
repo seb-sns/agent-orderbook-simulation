@@ -20,11 +20,11 @@ class MarketMaker {
 public:
   MarketMaker(Orderbook *orderbook, OrderPool *orderPool, double spread);
 
-  MarketMaker(const MarketMaker&) = delete;
-  MarketMaker& operator=(const MarketMaker&) = delete;
+  MarketMaker(const MarketMaker &) = delete;
+  MarketMaker &operator=(const MarketMaker &) = delete;
 
-  MarketMaker(MarketMaker&&) = default;
-  MarketMaker& operator=(MarketMaker&&) = default;
+  MarketMaker(MarketMaker &&) = default;
+  MarketMaker &operator=(MarketMaker &&) = default;
 
   OrderPtrs Act(Agent *agent);
   OrderPtrs CreateOrders(Agent *agent);
@@ -42,11 +42,11 @@ class MomentumTrader {
 public:
   MomentumTrader(Orderbook *orderbook, OrderPool *orderPool, double threshold);
 
-  MomentumTrader(const MomentumTrader&) = delete;
-  MomentumTrader& operator=(const MomentumTrader&) = delete;
+  MomentumTrader(const MomentumTrader &) = delete;
+  MomentumTrader &operator=(const MomentumTrader &) = delete;
 
-  MomentumTrader(MomentumTrader&&) = default;
-  MomentumTrader& operator=(MomentumTrader&&) = default;
+  MomentumTrader(MomentumTrader &&) = default;
+  MomentumTrader &operator=(MomentumTrader &&) = default;
 
   OrderPtrs Act(Agent *agent);
   OrderPtrs CreateOrders(Agent *agent);
@@ -67,11 +67,11 @@ class Random {
 public:
   Random(Orderbook *orderbook, OrderPool *orderPool, double sigma);
 
-  Random(const Random&) = delete;
-  Random& operator=(const Random&) = delete;
+  Random(const Random &) = delete;
+  Random &operator=(const Random &) = delete;
 
-  Random(Random&&) = default;
-  Random& operator=(Random&&) = default;
+  Random(Random &&) = default;
+  Random &operator=(Random &&) = default;
 
   OrderPtrs Act(Agent *agent);
   OrderPtrs CreateOrders(Agent *agent);

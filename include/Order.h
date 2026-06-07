@@ -40,7 +40,7 @@ public:
 
   void SetOrderId(const OrderId id) { id_ = id; }
   void SetOrderType(const OrderType type) { type_ = type; }
-  void GetClientRef(const ClientRef clientRef) { clientRef_ = clientRef; }
+  void SetClientRef(const ClientRef clientRef) { clientRef_ = clientRef; }
   void SetSide(const Side side) { side_ = side; }
   void SetPrice(const Price price) { price_ = price; }
   void SetInitialQuantity(const Quantity quantity) {

@@ -30,10 +30,16 @@ void AgentManager::WarmUp() {
 }
 
 void AgentManager::RunOutgoingLoop() {
+  if (agents_.empty()) {
+    return;
+  }
+
   AgentEvent event;
   double nextTime;
   while (currentTime_ < maxTime_) {
-    agentEventQueue_.Pop(event);
+    if (!agentEventQueue_.Pop(event)) {
+      return;
+    }
     OrderPtrs orders{agents_[event.pos]->Act()};
     ++agentActions_;
     for (auto &order : orders) {

@@ -11,7 +11,7 @@ class CalenderQueue {
 private:
   using Bucket = std::vector<T>;
   std::array<Bucket, n> buckets_{};
-  std::size_t bucket_width_{1};
+  std::size_t bucket_width_{5};
   TimeAccessor time_accessor_{};
   std::size_t head_{0};
   std::size_t size_{0};
@@ -33,8 +33,8 @@ bool CalenderQueue<T, n, TimeAccessor>::Push(T &&item) {
   auto &bucket = buckets_[bucketIndex];
   auto iter = std::upper_bound(bucket.begin(), bucket.end(), item,
                                [&](const T &a, const T &b) {
-                               return time_accessor_(a) > time_accessor_(b);
-                              });
+                                 return time_accessor_(a) > time_accessor_(b);
+                               });
   bucket.insert(iter, std::move(item));
   ++size_;
   return true;
@@ -49,7 +49,7 @@ bool CalenderQueue<T, n, TimeAccessor>::Pop(T &item) {
   while (buckets_[head_].empty()) {
     head_ = (head_ + 1) & (n - 1);
   }
-  auto &bucket= buckets_[head_];
+  auto &bucket = buckets_[head_];
   item = std::move(bucket.back());
   bucket.pop_back();
   --size_;
@@ -57,4 +57,6 @@ bool CalenderQueue<T, n, TimeAccessor>::Pop(T &item) {
 }
 
 template <typename T, std::size_t n, typename TimeAccessor>
-bool CalenderQueue<T, n, TimeAccessor>::empty() const { return size_ == 0; }
+bool CalenderQueue<T, n, TimeAccessor>::empty() const {
+  return size_ == 0;
+}

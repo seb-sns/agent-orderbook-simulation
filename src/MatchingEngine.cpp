@@ -7,7 +7,9 @@ void MatchingEngine::Start() {
   Order *order = nullptr;
   while (running_) {
     if (orders_.Pop(order)) {
-      order->SetOrderId(++counter_);
+      if (order->GetOrderType() != OrderType::CANCEL) {
+        order->SetOrderId(++counter_);
+      }
       ProcessOrder(std::move(order));
     }
   }
@@ -95,7 +97,7 @@ Order* MatchingEngine::CreateCancelOrder(Order * order) {
   Order *cancelOrder = orderPool_->get_order(slot);
   cancelOrder->SetOrderId(order->GetOrderId());
   cancelOrder->SetOrderType(OrderType::CANCEL);
-  cancelOrder->GetClientRef(order->GetClientRef());
+  cancelOrder->SetClientRef(order->GetClientRef());
   cancelOrder->SetSide(order->GetSide());
   cancelOrder->SetPrice(order->GetPrice());
   cancelOrder->SetInitialQuantity(0);

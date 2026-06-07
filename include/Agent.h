@@ -9,8 +9,18 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+
+struct AgentEvent {
+  double time;
+  size_t pos;
+
+  bool operator<(const AgentEvent &otherEvent) const {
+    return time > otherEvent.time;
+  }
+};
 
 struct AgentInfo {
   enum class Strategy { RANDOM, MARKETMAKER, MOMENTUMTRADER };

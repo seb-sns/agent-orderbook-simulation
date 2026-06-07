@@ -20,3 +20,7 @@ void TradeDispatcher::PushTradeInfo(Trade &&trade) {
     clients_[bidTrade.clientRef]->PushTrade(std::move(bidTrade));
   }
 }
+
+void TradeDispatcher::PushTradeInfo(TradeInfo &&tradeInfo) {
+  clients_[tradeInfo.clientRef]->PushTrade(std::move(tradeInfo));
+}
