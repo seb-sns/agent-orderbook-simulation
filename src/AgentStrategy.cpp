@@ -183,17 +183,37 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
   double longTermMovingAverage_ = longTermSum_ / longTermObservations_.size();
 
   // Relative divergence: threshold_ is a fraction of price (0.005 = 0.5%),
-  // and conviction (order size) scales with how far past it the signal is.
+  // and conviction scales with how far past it the signal is.
   const double divergence =
       (shortTermMovingAverage_ - longTermMovingAverage_) /
       longTermMovingAverage_;
   const double strength = std::min(std::abs(divergence) / threshold_, 5.0);
-  const Quantity quantity =
-      static_cast<Quantity>(std::clamp(std::round(10.0 * strength), 10.0, 50.0));
 
-  // Check the we have the maximum amount that could be required
-  if (((agent->GetAvailableCash() / 100.0) > (quantity * 120)) &&
-      divergence > threshold_) {
+  // Position-based execution (time-series momentum): the signal maps to a
+  // bounded target position and each action trades only the difference, so
+  // a persistent trend is one build-hold-unwind cycle instead of an
+  // unconditional market order every action while the state holds.
+  constexpr double TARGET_UNITS_PER_STRENGTH = 50.0; // max ±250 at 5×
+  constexpr std::int64_t MAX_TRADE = 50; // per-action slice
+  constexpr std::int64_t DEADBAND = 10;  // don't dribble tiny rebalances
+  std::int64_t target = 0;
+  if (std::abs(divergence) > threshold_) {
+    target = static_cast<std::int64_t>(
+        std::round(TARGET_UNITS_PER_STRENGTH * strength));
+    if (divergence < 0) {
+      target = -target;
+    }
+  }
+  const std::int64_t position = agent->GetUnits() - agent->GetInitialUnits();
+  const std::int64_t delta =
+      std::clamp(target - position, -MAX_TRADE, MAX_TRADE);
+  if (std::abs(delta) < DEADBAND) {
+    return OrderPtrs{};
+  }
+  const Quantity quantity = static_cast<Quantity>(std::abs(delta));
+
+  // Check we have the maximum amount that could be required
+  if (delta > 0 && (agent->GetAvailableCash() / 100.0) > (quantity * 120)) {
     PoolIndex slot = orderPool_->allocate();
     Order *order = orderPool_->get_order(slot);
     order->SetOrderId(0);
@@ -207,7 +227,7 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
 
     return OrderPtrs{order};
 
-  } else if ((agent->GetUnits() >= quantity) && divergence < -threshold_) {
+  } else if (delta < 0 && agent->GetUnits() >= quantity) {
     PoolIndex slot = orderPool_->allocate();
     Order *order = orderPool_->get_order(slot);
     order->SetOrderId(0);

@@ -152,9 +152,10 @@ Quote sizes mirror the skew (more size on the side that sheds inventory) and sca
 <h3>
   Momentum Trader agents
 </h3>
-Momentum Traders use a ring buffer to keep track of both a short term and long term moving average.
-When the relative divergence between the two crosses a threshold (0.5% by default), the agent places market buy or sell orders depending on if the trend is up or down, sized by conviction — the further past the threshold the signal is, the larger the order (10–50 units).
-Currently since the agent uses market orders (which will be cancelled if not filled). The Momentum Trader has no pressing need for cancel order logic.
+Momentum Traders use a ring buffer to keep track of both a short term and long term moving average of the mid.
+The relative divergence between the two maps to a bounded target position (time-series momentum): zero inside the threshold (0.1% by default), growing with conviction up to ±250 units at 5× the threshold.
+Each action the agent trades only the difference between target and current position, in market-order slices of at most 50 units — so a persistent trend is one build-hold-unwind cycle rather than a stream of unconditional orders, and the position unwinds as the signal decays.
+Since the agent uses market orders (which are cancelled if not filled), it has no pressing need for cancel order logic.
 <h3>
   Mean Reverter agents
 </h3>

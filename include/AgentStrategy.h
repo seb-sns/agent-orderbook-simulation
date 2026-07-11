@@ -47,6 +47,10 @@ private:
   OrderPool *orderPool_;
 };
 
+// Trend follower: compares a short and a long moving average of the mid and
+// holds a bounded position proportional to their divergence (time-series
+// momentum) — building via capped market-order slices while the signal
+// grows, holding while it persists, unwinding as it decays.
 class MomentumTrader {
 public:
   MomentumTrader(Orderbook *orderbook, OrderPool *orderPool, double threshold);
