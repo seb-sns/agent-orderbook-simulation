@@ -35,24 +35,46 @@ OrderPtrs MarketMaker::CreateOrders(Agent *agent) {
                            orderbook_->IndexToPrice(*bestBidIndex)) /
                           2.0;
 
-  Price askPrice = midPrice + (spread_ / 2.0);
-  askPrice = std::round(askPrice * 100.0) / 100.0;
-  Price bidPrice = midPrice - (spread_ / 2.0);
-  bidPrice = std::round(bidPrice * 100.0) / 100.0;
+  // Volatility estimate: EWMA of squared mid moves between actions.
+  constexpr double VOL_ALPHA = 0.1;
+  if (lastMid_ > 0) {
+    const double move = midPrice - lastMid_;
+    ewmaVar_ = (1.0 - VOL_ALPHA) * ewmaVar_ + VOL_ALPHA * move * move;
+  }
+  lastMid_ = midPrice;
+  const double vol = std::sqrt(ewmaVar_);
 
-  // Inventory skew: quote more size on the side that sheds inventory, so the
-  // maker leans back towards a flat book.
-  constexpr Quantity baseQuantity = 10;
-  const double skew = std::clamp(
+  // Quote width: base spread plus a volatility premium — adverse selection
+  // scales with how fast the mid is moving. Capped so a whale print can't
+  // blow the quotes out of the book entirely.
+  constexpr double VOL_WIDTH_MULT = 2.0;
+  constexpr double MAX_WIDTH_MULT = 10.0;
+  const double width =
+      std::min(spread_ + VOL_WIDTH_MULT * vol, MAX_WIDTH_MULT * spread_);
+
+  // Reservation price: skew the quote center against inventory by up to half
+  // the width, so quotes retreat from the side being run over (fully long →
+  // ask sits at the mid, bid a full width below).
+  const double invSkew = std::clamp(
       (agent->GetUnits() - agent->GetInitialUnits()) / 1000.0, -1.0, 1.0);
+  const double center = midPrice - (width / 2.0) * invSkew;
+
+  Price askPrice = std::round((center + width / 2.0) * 100.0) / 100.0;
+  Price bidPrice = std::round((center - width / 2.0) * 100.0) / 100.0;
+
+  // Size skew mirrors the price skew (more size on the side that sheds
+  // inventory), and total size scales down as volatility widens the quote.
+  constexpr Quantity baseQuantity = 10;
+  const double sizeScale = spread_ / width;
   const Quantity askQuantity = static_cast<Quantity>(
-      std::clamp(std::round(baseQuantity * (1.0 + skew)), 1.0, 20.0));
+      std::clamp(std::round(baseQuantity * (1.0 + invSkew) * sizeScale), 1.0,
+                 20.0));
   const Quantity bidQuantity = static_cast<Quantity>(
-      std::clamp(std::round(baseQuantity * (1.0 - skew)), 1.0, 20.0));
+      std::clamp(std::round(baseQuantity * (1.0 - invSkew) * sizeScale), 1.0,
+                 20.0));
 
-  if ((agent->GetUnits() >= askQuantity) &&
-      (agent->GetAvailableCash() / 100.0 > bidPrice * bidQuantity)) {
-
+  OrderPtrs orders{};
+  if (agent->GetUnits() >= askQuantity) {
     PoolIndex sellSideSlot = orderPool_->allocate();
     Order *sellOrder = orderPool_->get_order(sellSideSlot);
     sellOrder->SetOrderId(0);
@@ -63,7 +85,10 @@ OrderPtrs MarketMaker::CreateOrders(Agent *agent) {
     sellOrder->SetInitialQuantity(askQuantity);
     sellOrder->SetRemainingQuantity(askQuantity);
     sellOrder->SetIndex(sellSideSlot);
+    orders.push_back(sellOrder);
+  }
 
+  if (agent->GetAvailableCash() / 100.0 > bidPrice * bidQuantity) {
     PoolIndex buySideSlot = orderPool_->allocate();
     Order *buyOrder = orderPool_->get_order(buySideSlot);
     buyOrder->SetOrderId(0);
@@ -74,10 +99,9 @@ OrderPtrs MarketMaker::CreateOrders(Agent *agent) {
     buyOrder->SetInitialQuantity(bidQuantity);
     buyOrder->SetRemainingQuantity(bidQuantity);
     buyOrder->SetIndex(buySideSlot);
-
-    return OrderPtrs{buyOrder, sellOrder};
+    orders.push_back(buyOrder);
   }
-  return OrderPtrs{};
+  return orders;
 }
 
 OrderPtrs MarketMaker::CancelOrders(Agent *agent) {
@@ -170,7 +194,6 @@ OrderPtrs MomentumTrader::CreateOrders(Agent *agent) {
   // Check the we have the maximum amount that could be required
   if (((agent->GetAvailableCash() / 100.0) > (quantity * 120)) &&
       divergence > threshold_) {
-
     PoolIndex slot = orderPool_->allocate();
     Order *order = orderPool_->get_order(slot);
     order->SetOrderId(0);

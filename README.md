@@ -145,8 +145,10 @@ At every action, a random agent will look through it's orders and have a 5% chan
 <h3>
   Market Maker agents
 </h3>
-Market Maker agents cancel-and-replace: each action they withdraw all of their resting quotes and place a fresh buy/sell pair within a given spread of the current mid price.
-Quote sizes are skewed by inventory — a maker that has accumulated units quotes a larger ask and smaller bid (and vice versa), leaning back towards a flat position.
+Market Maker agents cancel-and-replace: each action they withdraw all of their resting quotes and place a fresh buy/sell pair around the current mid price.
+The quote width is the base spread plus a volatility premium (an EWMA of squared mid moves between actions, capped at 10× the base spread), since adverse selection scales with how fast the market is moving.
+The quote center is skewed against inventory (a reservation price): a maker that has accumulated units centers its quotes below the mid, so its ask sheds inventory aggressively while its bid retreats from the flow running it over.
+Quote sizes mirror the skew (more size on the side that sheds inventory) and scale down as volatility widens the quote, and each side is placed independently — a maker that can only fund one side still quotes that side.
 <h3>
   Momentum Trader agents
 </h3>

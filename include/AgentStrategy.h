@@ -19,6 +19,12 @@ using AgentStrategy =
 
 using OrderPtrs = std::vector<Order *>;
 
+// Quotes both sides of the touch, cancel-and-replace each action. The quote
+// width is the base spread plus a volatility premium (EWMA of squared mid
+// moves between actions), and the quote center is skewed against inventory
+// (reservation price) so quotes retreat from the side being run over; size
+// scales down as the width scales up. Each side is quoted independently of
+// whether the other is fundable.
 class MarketMaker {
 public:
   MarketMaker(Orderbook *orderbook, OrderPool *orderPool, double spread);
@@ -35,6 +41,8 @@ public:
 
 private:
   double spread_;
+  double lastMid_{-1.0}; // < 0: no mid observed yet
+  double ewmaVar_{0.0};  // EWMA of squared mid moves between actions
   Orderbook *orderbook_;
   OrderPool *orderPool_;
 };
