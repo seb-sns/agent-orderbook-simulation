@@ -3,15 +3,30 @@
 #include "MatchingEngine.h"
 #include "Order.h"
 #include "Orderbook.h"
+#include "ThreadPin.h"
 #include "TradeDispatcher.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <iomanip>
+#include <iostream>
 #include <memory>
+#include <numeric>
 #include <random>
-#include <ratio>
 #include <vector>
 
+// Streams orders through MatchingEngine::ProcessOrder one at a time, timing
+// each call. Orders are allocated just before processing so the working set
+// fits the pool (a resting book plus in-flight orders), matching how the real
+// simulation uses it. ~5% of iterations first cancel a randomly chosen recent
+// resting limit order (by its real order id, so cancels genuinely exercise
+// the erase path — some will miss because the target already filled, which is
+// realistic).
 int main() {
+  PinCurrentThreadToCore(2);
+  constexpr int N_ORDERS = 5'000'000;
+
   std::bernoulli_distribution bernoulli_distribution(0.5);
   std::bernoulli_distribution bernoulli_distribution_cancel(0.05);
   std::normal_distribution<> normal_distribution(0, 5);
@@ -26,71 +41,76 @@ int main() {
       std::make_unique<Agent>(tradeDispatcher, matchingEngine,
                               Random(&orderbook, &orderPool, 0.5), 0, 1);
 
-  auto CreateRandomOrders = [&]() {
-    std::vector<Order *> orders;
-    for (int i = 0; i < 5'000'000; ++i) {
-      bool cancel_result = bernoulli_distribution_cancel(gen);
-      if (cancel_result && i > 100) {
-        auto selectedIndex = std::rand() % 100 + 1;
-        Order *selectedOrder = orders[i - selectedIndex];
-        PoolIndex index = orderPool.allocate();
-        Order *cancelOrder = orderPool.get_order(index);
-        cancelOrder->SetOrderId(i);
-        cancelOrder->SetOrderType(OrderType::CANCEL);
-        cancelOrder->SetClientRef(0);
-        cancelOrder->SetSide(selectedOrder->GetSide());
-        cancelOrder->SetPrice(selectedOrder->GetPrice());
-        cancelOrder->SetInitialQuantity(0);
-        cancelOrder->SetRemainingQuantity(0);
-        cancelOrder->SetIndex(index);
+  struct RecentOrder {
+    OrderId id;
+    Side side;
+    Price price;
+  };
+  std::array<RecentOrder, 128> recent;
+  std::size_t recentCount = 0, recentHead = 0;
 
-        orders.push_back(cancelOrder);
-      }
-      OrderType orderType;
-      Side side;
-      Price price = 110 + normal_distribution(gen);
-      price = std::round(price * 100.0) / 100.0;
-      Quantity quantity = 10 + normal_distribution(gen);
-      quantity = std::round(quantity * 100.0) / 100.0;
-      bool side_result = bernoulli_distribution(gen);
-      if (side_result) {
-        side = Side::Buy;
-      } else {
-        side = Side::Sell;
-      }
-      bool type_result = bernoulli_distribution(gen);
-      if (type_result) {
-        orderType = OrderType::LIMIT;
-      } else {
-        orderType = OrderType::MARKET;
-      }
-      PoolIndex index = orderPool.allocate();
-      Order *order = orderPool.get_order(index);
-      order->SetOrderId(i);
-      order->SetOrderType(orderType);
-      order->SetClientRef(0);
-      order->SetSide(side);
-      order->SetPrice(price);
-      order->SetInitialQuantity(quantity);
-      order->SetRemainingQuantity(quantity);
-      order->SetIndex(index);
+  std::vector<double> latencies;
+  latencies.reserve(N_ORDERS + N_ORDERS / 16);
 
-      orders.push_back(order);
-    }
-    return orders;
+  auto processTimed = [&](Order *order) {
+    auto start = std::chrono::steady_clock::now();
+    matchingEngine.ProcessOrder(order);
+    auto end = std::chrono::steady_clock::now();
+    latencies.push_back(
+        std::chrono::duration<double, std::nano>(end - start).count());
   };
 
-  std::vector<Order *> orders = CreateRandomOrders();
-  std::vector<double> latencies;
-  latencies.reserve(10'000'000);
-
   auto loop_start = std::chrono::steady_clock::now();
-  for (auto order : orders) {
-    auto start = std::chrono::steady_clock::now();
-    matchingEngine.ProcessOrder(std::move(order));
-    auto end = std::chrono::steady_clock::now();
-    double ms = std::chrono::duration<double, std::nano>(end - start).count();
-    latencies.push_back(ms);
+  for (int i = 0; i < N_ORDERS; ++i) {
+    if (recentCount > 0 && bernoulli_distribution_cancel(gen)) {
+      const RecentOrder &target =
+          recent[(recentHead + gen() % recentCount) % recent.size()];
+      PoolIndex index = orderPool.allocate();
+      Order *cancelOrder = orderPool.get_order(index);
+      cancelOrder->SetOrderId(target.id);
+      cancelOrder->SetOrderType(OrderType::CANCEL);
+      cancelOrder->SetClientRef(0);
+      cancelOrder->SetSide(target.side);
+      cancelOrder->SetPrice(target.price);
+      cancelOrder->SetInitialQuantity(0);
+      cancelOrder->SetRemainingQuantity(0);
+      cancelOrder->SetIndex(index);
+      processTimed(cancelOrder);
+    }
+
+    Price price = 110 + normal_distribution(gen);
+    price = std::round(price * 100.0) / 100.0;
+    const Quantity quantity = static_cast<Quantity>(
+        std::clamp(std::round(10 + normal_distribution(gen)), 1.0, 20.0));
+    const Side side = bernoulli_distribution(gen) ? Side::Buy : Side::Sell;
+    const OrderType orderType =
+        bernoulli_distribution(gen) ? OrderType::LIMIT : OrderType::MARKET;
+
+    PoolIndex index = orderPool.allocate();
+    Order *order = orderPool.get_order(index);
+    order->SetOrderId(i + 1);
+    order->SetOrderType(orderType);
+    order->SetClientRef(0);
+    order->SetSide(side);
+    order->SetPrice(price);
+    order->SetInitialQuantity(quantity);
+    order->SetRemainingQuantity(quantity);
+    order->SetIndex(index);
+
+    if (orderType == OrderType::LIMIT) {
+      if (recentCount < recent.size()) {
+        recent[(recentHead + recentCount++) % recent.size()] = {
+            static_cast<OrderId>(i + 1), side, price};
+      } else {
+        recent[recentHead] = {static_cast<OrderId>(i + 1), side, price};
+        recentHead = (recentHead + 1) % recent.size();
+      }
+    }
+    processTimed(order);
+
+    // Drain the agent's incoming trade buffer between timed calls — nothing
+    // else consumes it in this benchmark and PushTrade spins when it fills.
+    agent->ClearIncoming();
   }
   auto loop_end = std::chrono::steady_clock::now();
 
@@ -127,28 +147,20 @@ int main() {
   std::cout << "| Throughput: " << std::setw(10) << std::fixed
             << std::setprecision(0) << throughput_ops_per_sec << " ops/sec"
             << std::endl;
-
-  if (max_latency_ns > 0 || p99_latency_ns > 0) {
-    std::cout << "+---------------------------------------+" << std::endl;
-    std::cout << "| Latency Statistics (nanoseconds)" << std::endl;
-    std::cout << "|   Average: " << std::setw(10) << std::fixed
-              << std::setprecision(1) << avg_latency_ns << " ns" << std::endl;
-    std::cout << "|   50th %:  " << std::setw(10) << std::fixed
-              << std::setprecision(1) << p50_latency_ns << " ns" << std::endl;
-    std::cout << "|   95th %:  " << std::setw(10) << std::fixed
-              << std::setprecision(1) << p95_latency_ns << " ns" << std::endl;
-    std::cout << "|   99th %:  " << std::setw(10) << std::fixed
-              << std::setprecision(1) << p99_latency_ns << " ns" << std::endl;
-    std::cout << "|   99.9th %:" << std::setw(10) << std::fixed
-              << std::setprecision(1) << p999_latency_ns << " ns" << std::endl;
-    std::cout << "|   99.99th %:" << std::setw(9) << std::fixed
-              << std::setprecision(1) << p9999_latency_ns << " ns" << std::endl;
-    std::cout << "|   Max:     " << std::setw(10) << std::fixed
-              << std::setprecision(1) << max_latency_ns << " ns" << std::endl;
-  } else {
-    std::cout << "| Avg Latency: " << std::setw(8) << std::fixed
-              << std::setprecision(1) << avg_latency_ns << " ns" << std::endl;
-  }
-
+  std::cout << "| Average latency: " << std::setw(10) << avg_latency_ns
+            << " ns" << std::endl;
+  std::cout << "| Median latency: " << std::setw(10) << p50_latency_ns << " ns"
+            << std::endl;
+  std::cout << "| 95th percentile: " << std::setw(10) << p95_latency_ns
+            << " ns" << std::endl;
+  std::cout << "| 99th percentile: " << std::setw(10) << p99_latency_ns
+            << " ns" << std::endl;
+  std::cout << "| 99.9th percentile: " << std::setw(10) << p999_latency_ns
+            << " ns" << std::endl;
+  std::cout << "| 99.99th percentile: " << std::setw(10) << p9999_latency_ns
+            << " ns" << std::endl;
+  std::cout << "| Max latency: " << std::setw(10) << max_latency_ns << " ns"
+            << std::endl;
   std::cout << "+---------------------------------------+" << std::endl;
+  return 0;
 }

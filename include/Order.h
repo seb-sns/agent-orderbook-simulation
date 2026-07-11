@@ -9,22 +9,22 @@ using Quantity = std::uint32_t;
 using ClientRef = std::uint64_t;
 using Timestamp = std::uint64_t;
 
-enum class Side { Buy, Sell };
+enum class Side : std::uint8_t { Buy, Sell };
 
-enum class OrderType { LIMIT, MARKET, CANCEL };
+enum class OrderType : std::uint8_t { LIMIT, MARKET, CANCEL };
 class Order {
 private:
-  OrderId id_;
-  OrderType type_;
-  ClientRef clientRef_;
-  Side side_;
   Price price_;
-  Quantity initialQuantity_;
   Quantity remainingQuantity_;
   std::int64_t index_{-1};
   std::int64_t prev_{-1}; // Prev -> closer to the head (older orders)
   std::int64_t next_{-1}; // Next -> closer to the tail (newer orders)
-  Timestamp timestamp_;
+  Quantity initialQuantity_;
+  OrderType type_;
+  Side side_;
+  OrderId id_;
+  ClientRef clientRef_;
+  Timestamp timestamp_{0}; // agent-local sequence number, see Agent::TrackOrder
 
 public:
   OrderId GetOrderId() const { return id_; }
@@ -35,6 +35,7 @@ public:
   Quantity GetInitialQuantity() const { return initialQuantity_; }
   Quantity GetRemainingQuantity() const { return remainingQuantity_; }
   std::int64_t GetIndex() const { return index_; }
+  Timestamp GetTimestamp() const { return timestamp_; }
   std::int64_t GetPrev() const { return prev_; }
   std::int64_t GetNext() const { return next_; }
 
@@ -50,6 +51,7 @@ public:
     remainingQuantity_ = quantity;
   }
   void SetIndex(const std::int64_t index) { index_ = index; }
+  void SetTimestamp(const Timestamp timestamp) { timestamp_ = timestamp; }
   void SetPrev(const std::int64_t index) { prev_ = index; }
   void SetNext(const std::int64_t index) { next_ = index; }
 
@@ -64,8 +66,7 @@ public:
 
   Quantity Fill(Order &order) {
     const Quantity orderRemaining = order.GetRemainingQuantity();
-    const Quantity fillQuantity =
-        std::min(remainingQuantity_, orderRemaining);
+    const Quantity fillQuantity = std::min(remainingQuantity_, orderRemaining);
     remainingQuantity_ -= fillQuantity;
     order.SetRemainingQuantity(orderRemaining - fillQuantity);
     return fillQuantity;

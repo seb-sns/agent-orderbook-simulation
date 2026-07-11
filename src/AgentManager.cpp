@@ -1,6 +1,8 @@
 #include "AgentManager.h"
 #include "AgentStrategy.h"
+#include "Format.h"
 #include "MatchingEngine.h"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -8,6 +10,8 @@
 #include <iomanip>
 #include <memory>
 #include <numeric>
+#include <unistd.h>
+#include <x86intrin.h>
 
 AgentManager::AgentManager(std::uint64_t maxTime) : maxTime_(maxTime) {};
 
@@ -18,10 +22,11 @@ void AgentManager::AddAgent(std::unique_ptr<Agent> agent) {
 }
 
 void AgentManager::PushAgentEvent(AgentEvent &&event) {
-  agentEventQueue_.Push(std::move(event));
+  agentEventQueue_.Push(event);
 }
 
 void AgentManager::WarmUp() {
+  agentEventQueue_.Reserve(agents_.size());
   for (size_t i = 0; i < agents_.size(); ++i) {
     double time = agents_[i]->ScheduleNextAction(currentTime_);
     size_t pos = i;
@@ -37,9 +42,10 @@ void AgentManager::RunOutgoingLoop() {
   AgentEvent event;
   double nextTime;
   while (currentTime_ < maxTime_) {
-    if (!agentEventQueue_.Pop(event)) {
+    if (agentEventQueue_.Empty()) {
       return;
     }
+    event = agentEventQueue_.Top();
     OrderPtrs orders{agents_[event.pos]->Act()};
     ++agentActions_;
     for (auto &order : orders) {
@@ -47,14 +53,31 @@ void AgentManager::RunOutgoingLoop() {
     }
     currentTime_ = event.time;
     nextTime = agents_[event.pos]->ScheduleNextAction(currentTime_);
-    PushAgentEvent(AgentEvent(nextTime, event.pos));
+    // The acting agent is always the queue head, so one sift-down replaces
+    // the pop+push pair.
+    agentEventQueue_.ReplaceTop(AgentEvent(nextTime, event.pos));
   }
 }
 
 void AgentManager::RunIncomingLoop() {
+  // Adaptive backoff: polling empty ring buffers hammers cache lines the
+  // matching thread writes, so idle passes back off exponentially (capped).
+  int idlePasses = 0;
   while (running_) {
+    bool drainedAny = false;
     for (auto &agent : agents_) {
-      agent->PopTrade();
+      // Drain each agent fully per pass instead of one trade per scan.
+      while (agent->PopTrade()) {
+        drainedAny = true;
+      }
+    }
+    if (drainedAny) {
+      idlePasses = 0;
+    } else if (idlePasses < 64) {
+      ++idlePasses;
+    }
+    for (int i = 0; i <= idlePasses; ++i) {
+      _mm_pause();
     }
   }
   // Empty out each agent incoming buffer once we are done
@@ -91,71 +114,98 @@ void AgentManager::PrintSummary() {
   };
 
   struct AgentData {
-    std::vector<double> cash;
-    std::vector<double> units;
+    std::vector<double> unitsDelta;
     std::vector<double> profit;
   };
-
-  AgentData randomAgents, marketMakerAgents, momentumTraderAgents;
-  constexpr std::int64_t initial_cash_per_agent = 1'000'000'000;
+  static constexpr const char *STRATEGY_NAMES[] = {
+      "Random", "Market Maker", "Momentum", "Mean Reverter", "Whale"};
+  AgentData data[5];
 
   for (const auto &agent : agents_) {
     AgentInfo info = agent->GetInfo();
-    double totalCash =
+    const double totalCash =
         (agent->GetAvailableCash() + agent->GetReservedCash()) / 100.0;
-    double units = agent->GetUnits();
-    double profit = (totalCash) - (initial_cash_per_agent / 100.0);
-
-    switch (info.strategy_) {
-    case AgentInfo::Strategy::RANDOM:
-      randomAgents.cash.push_back(totalCash);
-      randomAgents.units.push_back(units);
-      randomAgents.profit.push_back(profit);
-      break;
-    case AgentInfo::Strategy::MARKETMAKER:
-      marketMakerAgents.cash.push_back(totalCash);
-      marketMakerAgents.units.push_back(units);
-      marketMakerAgents.profit.push_back(profit);
-      break;
-    case AgentInfo::Strategy::MOMENTUMTRADER:
-      momentumTraderAgents.cash.push_back(totalCash);
-      momentumTraderAgents.units.push_back(units);
-      momentumTraderAgents.profit.push_back(profit);
-      break;
-    }
+    AgentData &bucket = data[static_cast<std::size_t>(info.strategy_)];
+    bucket.profit.push_back(totalCash - agent->GetCash() / 100.0);
+    bucket.unitsDelta.push_back(
+        static_cast<double>(agent->GetUnits() - agent->GetInitialUnits()));
   }
 
-  auto printAgentStats = [&](const std::string &agentName,
-                             const AgentData &data) {
-    const int LABEL_WIDTH = 40;
-    const int VALUE_WIDTH = 15;
+  struct Row {
+    const char *name;
+    std::size_t n;
+    double meanProfit, sigmaProfit, meanUnitsDelta, sigmaUnits;
+  };
+  std::vector<Row> rows;
+  for (std::size_t i = 0; i < 5; ++i) {
+    if (data[i].profit.empty()) {
+      continue;
+    }
+    rows.push_back({STRATEGY_NAMES[i], data[i].profit.size(),
+                    calculateMean(data[i].profit),
+                    calculateStdDev(data[i].profit),
+                    calculateMean(data[i].unitsDelta),
+                    calculateStdDev(data[i].unitsDelta)});
+  }
+  // Leaderboard order: winners first.
+  std::sort(rows.begin(), rows.end(),
+            [](const Row &a, const Row &b) { return a.meanProfit > b.meanProfit; });
 
-    double meanProfit = calculateMean(data.profit);
-    double profitStdDev = calculateStdDev(data.profit);
-    double meanCash = calculateMean(data.cash);
-    double cashStdDev = calculateStdDev(data.cash);
-    double meanUnits = calculateMean(data.units);
-    double unitsStdDev = calculateStdDev(data.units);
+  const bool color = isatty(fileno(stdout)) != 0;
+  const char *RED = color ? "\033[31m" : "";
+  const char *GREEN = color ? "\033[32m" : "";
+  const char *DIM = color ? "\033[90m" : "";
+  const char *RESET = color ? "\033[0m" : "";
 
-    auto printLine = [&](const std::string &label, double value) {
-      std::ostringstream line;
-      line << std::fixed << std::setprecision(3) << std::left
-           << std::setw(LABEL_WIDTH) << (label + ":") << std::right
-           << std::setw(VALUE_WIDTH) << value;
-      std::cout << line.str() << '\n';
-    };
-
-    printLine(agentName + " mean profit", meanProfit);
-    printLine(agentName + " profit σ", profitStdDev);
-    printLine(agentName + " mean cash", meanCash);
-    printLine(agentName + " cash σ", cashStdDev);
-    printLine(agentName + " mean units", meanUnits);
-    printLine(agentName + " units σ", unitsStdDev);
-
-    std::cout << "\n";
+  // Whole pounds: pence are noise at these magnitudes and widen every column.
+  const auto money = [](double value) {
+    const std::int64_t pounds = std::llround(value < 0 ? -value : value);
+    return std::string(value < 0 ? "-£" : "£") + WithCommas(pounds);
+  };
+  const auto signedCount = [](double value) {
+    const std::int64_t count = std::llround(value);
+    return (count > 0 ? "+" : "") + WithCommas(count);
   };
 
-  printAgentStats("Random Agents", randomAgents);
-  printAgentStats("Market Maker Agents", marketMakerAgents);
-  printAgentStats("Momentum Trader Agents", momentumTraderAgents);
+  double maxAbsProfit = 0;
+  for (const Row &row : rows) {
+    maxAbsProfit = std::max(maxAbsProfit, std::abs(row.meanProfit));
+  }
+
+  constexpr int BAR_WIDTH = 12;
+  std::cout << "────────────────────── AGENT P&L ──────────────────────\n";
+  // setw counts bytes: £, σ and Δ are 2 UTF-8 bytes, so widths below are
+  // padded by one per symbol to keep the visual columns aligned.
+  std::cout << DIM << " " << std::left << std::setw(15) << "type" << std::right
+            << std::setw(4) << "n" << std::setw(13) << "mean P&L"
+            << std::setw(13) << "σ P&L" << std::setw(12) << "units Δ"
+            << std::setw(11) << "σ units" << "  mean P&L" << '\n' << RESET;
+  for (const Row &row : rows) {
+    const char *pnlColor = row.meanProfit > 0.005   ? GREEN
+                           : row.meanProfit < -0.005 ? RED
+                                                     : DIM;
+    std::cout << " " << std::left << std::setw(15) << row.name << std::right
+              << std::setw(4) << row.n << pnlColor << std::setw(14)
+              << money(row.meanProfit) << RESET << std::setw(13)
+              << money(row.sigmaProfit) << std::setw(11)
+              << signedCount(row.meanUnitsDelta) << std::setw(10)
+              << WithCommas(std::llround(row.sigmaUnits)) << "  " << pnlColor;
+    // Eighth-block resolution keeps the bars linear across the whole range:
+    // £1k next to £1M reads as a hairline next to a full bar, not 1 vs 12.
+    static constexpr const char *EIGHTHS[] = {"", "▏", "▎", "▍",
+                                              "▌", "▋", "▊", "▉"};
+    int eighths =
+        maxAbsProfit > 0
+            ? static_cast<int>(std::abs(row.meanProfit) / maxAbsProfit *
+                                   BAR_WIDTH * 8 + 0.5)
+            : 0;
+    if (eighths == 0 && std::abs(row.meanProfit) > 0.005) {
+      eighths = 1; // nonzero stays visible as the thinnest sliver
+    }
+    for (int j = 0; j < eighths / 8; ++j) {
+      std::cout << "█";
+    }
+    std::cout << EIGHTHS[eighths % 8] << RESET << '\n';
+  }
+  std::cout << '\n';
 }

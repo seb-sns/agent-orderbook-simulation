@@ -11,8 +11,11 @@ class Agent;
 class MarketMaker;
 class MomentumTrader;
 class Random;
+class MeanReverter;
+class Whale;
 
-using AgentStrategy = std::variant<MarketMaker, MomentumTrader, Random>;
+using AgentStrategy =
+    std::variant<MarketMaker, MomentumTrader, Random, MeanReverter, Whale>;
 
 using OrderPtrs = std::vector<Order *>;
 
@@ -32,8 +35,6 @@ public:
 
 private:
   double spread_;
-  double lastMidPrice_;
-  double midPrice_;
   Orderbook *orderbook_;
   OrderPool *orderPool_;
 };
@@ -63,6 +64,55 @@ private:
   OrderPool *orderPool_;
 };
 
+// Fundamentalist: believes the asset has a fair value and fades deviations —
+// lifts the ask when the mid drops below fairValue - band, hits the bid when
+// it rises above fairValue + band. Cancels resting orders once the mid is
+// back inside the band (or its stance flips).
+class MeanReverter {
+public:
+  MeanReverter(Orderbook *orderbook, OrderPool *orderPool, double fairValue,
+               double band);
+
+  MeanReverter(const MeanReverter &) = delete;
+  MeanReverter &operator=(const MeanReverter &) = delete;
+
+  MeanReverter(MeanReverter &&) = default;
+  MeanReverter &operator=(MeanReverter &&) = default;
+
+  OrderPtrs Act(Agent *agent);
+  OrderPtrs CreateOrders(Agent *agent);
+  OrderPtrs CancelOrders(Agent *agent);
+
+private:
+  double fairValue_;
+  double band_;
+  Orderbook *orderbook_;
+  OrderPool *orderPool_;
+};
+
+// Liquidity taker: submits one large market order per action, random side.
+// Meant to act rarely (long action interval) and shock the book.
+class Whale {
+public:
+  Whale(Orderbook *orderbook, OrderPool *orderPool, Quantity orderSize);
+
+  Whale(const Whale &) = delete;
+  Whale &operator=(const Whale &) = delete;
+
+  Whale(Whale &&) = default;
+  Whale &operator=(Whale &&) = default;
+
+  OrderPtrs Act(Agent *agent);
+  OrderPtrs CreateOrders(Agent *agent);
+  OrderPtrs CancelOrders(Agent *agent);
+
+private:
+  std::bernoulli_distribution sideDistribution_;
+  std::uniform_int_distribution<Quantity> quantityDistribution_;
+  Orderbook *orderbook_;
+  OrderPool *orderPool_;
+};
+
 class Random {
 public:
   Random(Orderbook *orderbook, OrderPool *orderPool, double sigma);
@@ -81,6 +131,7 @@ private:
   double sigma_;
   std::normal_distribution<double> normal_distribution_;
   std::bernoulli_distribution bernoulli_distribution_;
+  std::uniform_int_distribution<Quantity> quantityDistribution_;
   Orderbook *orderbook_;
   OrderPool *orderPool_;
 };

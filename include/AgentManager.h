@@ -1,7 +1,7 @@
 #pragma once
 #include "Agent.h"
 #include "AgentStrategy.h"
-#include "LadderQueue.h"
+#include "EventQueue.h"
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -28,9 +28,13 @@ public:
   void PrintSummary();
 
   std::atomic<bool> running_{false};
-  std::uint64_t currentTime_{0};
+  double currentTime_{0};
   std::uint64_t maxTime_;
   std::uint64_t agentActions_{0};
   std::vector<std::unique_ptr<Agent>> agents_;
-  LadderQueue agentEventQueue_;
+  // One pending event per agent, strictly time-ordered. At this queue size
+  // a replace-top binary heap beats fancier structures (see
+  // benchmarks/benchmark_EventQueue.cpp); the old LadderQueue misordered
+  // events badly (see backlog.md).
+  EventQueue<AgentEvent> agentEventQueue_;
 };

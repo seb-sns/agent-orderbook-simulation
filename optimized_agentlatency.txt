@@ -1,0 +1,24 @@
++---------------------------------------+
+| Number of agents: 3x        16
+| Actions processed:     556095
+| Orders processed:   25667926
+| Duration:     17382.89 ms
+| Throughput (actions/s):      31991 ops/sec
++---------------------------------------+
+| Number of agents: 3x        32
+| Actions processed:     920379
+| Orders processed:   91965353
+| Duration:     57842.98 ms
+| Throughput (actions/s):      15912 ops/sec
++---------------------------------------+
+| Number of agents: 3x        64
+| Actions processed:    1585975
+| Orders processed:  136939152
+| Duration:     38719.48 ms
+| Throughput (actions/s):      40961 ops/sec
++---------------------------------------+
+| Number of agents: 3x       128
+| Actions processed:    3199510
+| Orders processed:  307304449
+| Duration:    111687.60 ms
+| Throughput (actions/s):      28647 ops/sec

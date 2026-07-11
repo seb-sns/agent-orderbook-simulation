@@ -3,24 +3,37 @@
 #include "Trade.h"
 
 void TradeDispatcher::Attach(Agent *agent) {
-  clients_[agent->GetClientRef()] = agent;
+  const ClientRef ref = agent->GetClientRef();
+  if (clients_.size() <= ref) {
+    clients_.resize(ref + 1, nullptr);
+  }
+  clients_[ref] = agent;
 }
 
 void TradeDispatcher::Detach(Agent *agent) {
-  clients_.erase(agent->GetClientRef());
+  const ClientRef ref = agent->GetClientRef();
+  if (ref < clients_.size() && clients_[ref] == agent) {
+    clients_[ref] = nullptr;
+  }
 }
 
 void TradeDispatcher::PushTradeInfo(Trade &&trade) {
   TradeInfo askTrade = trade.GetAskTrade();
   TradeInfo bidTrade = trade.GetBidTrade();
   if (askTrade.orderType != OrderType::CANCEL) {
-    clients_[askTrade.clientRef]->PushTrade(std::move(askTrade));
+    if (Agent *client = ClientFor(askTrade.clientRef)) {
+      client->PushTrade(std::move(askTrade));
+    }
   }
   if (bidTrade.orderType != OrderType::CANCEL) {
-    clients_[bidTrade.clientRef]->PushTrade(std::move(bidTrade));
+    if (Agent *client = ClientFor(bidTrade.clientRef)) {
+      client->PushTrade(std::move(bidTrade));
+    }
   }
 }
 
 void TradeDispatcher::PushTradeInfo(TradeInfo &&tradeInfo) {
-  clients_[tradeInfo.clientRef]->PushTrade(std::move(tradeInfo));
+  if (Agent *client = ClientFor(tradeInfo.clientRef)) {
+    client->PushTrade(std::move(tradeInfo));
+  }
 }

@@ -1,6 +1,7 @@
 #include "MatchingEngine.h"
 #include "Order.h"
 #include <utility>
+#include <x86intrin.h>
 
 void MatchingEngine::Start() {
   running_ = true;
@@ -11,12 +12,15 @@ void MatchingEngine::Start() {
         order->SetOrderId(++counter_);
       }
       ProcessOrder(std::move(order));
+    } else {
+      _mm_pause();
     }
   }
 }
 
 void MatchingEngine::Stop() {
   while (!orders_.empty()) {
+    _mm_pause();
   }
   running_ = false;
 }

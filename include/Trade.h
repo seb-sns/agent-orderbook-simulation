@@ -1,22 +1,27 @@
 #pragma once
 
 #include "Order.h"
+#include <cstdint>
 
-enum class ExecutionType { CANCEL, PARTIAL, FULL, INVALID };
+// ACK: the engine accepted a limit order onto the book — carries the
+// engine-assigned orderId back to the agent so it can cancel later.
+enum class ExecutionType : std::uint8_t { CANCEL, PARTIAL, FULL, INVALID, ACK };
 
-// Trade info gives information on the trade as well as providing the original
-// order from the opposite side
-
+// Packed to one cache line: this struct is constructed twice per fill and
+// copied through the dispatcher and each agent's incoming ring. clientRef
+// and clientSeq are narrowed to 32 bits (≤4B agents / orders-per-agent).
 struct TradeInfo {
+  Price price;      // executed price
+  Price orderPrice; // price the order was submitted (reserved) at
   OrderId orderId;
-  OrderType orderType;
-  ClientRef clientRef;
-  Side side;
-  Price price;
+  std::uint32_t clientRef;
+  std::uint32_t clientSeq; // the submitting agent's own sequence number
   Quantity quantity;
-  Order order;
+  OrderType orderType;
+  Side side;
   ExecutionType type;
 };
+static_assert(sizeof(TradeInfo) == 40, "TradeInfo should stay one cache line");
 
 class Trade {
 public:

@@ -5,7 +5,6 @@
 #include "Orderbook.h"
 #include "RingBuffer.h"
 #include <cstdint>
-#include <unordered_map>
 
 class Dispatcher;
 class AgentManager;
@@ -31,7 +30,6 @@ private:
   Orderbook &orderbook_;
   OrderPool *orderPool_;
   RingBuffer<Order *, 1024> orders_;
-  std::unordered_map<OrderId, Order *> ordersMap_;
 
   std::atomic<bool> running_{false};
 

@@ -5,28 +5,32 @@
 #include "OrderPool.h"
 #include "Trade.h"
 #include <atomic>
-#include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <iostream>
 #include <mutex>
-#include <shared_mutex>
+#include <random>
 #include <stdexcept>
-#include <unordered_map>
 #include <variant>
+#include <x86intrin.h>
 
-static std::random_device rd;
-static std::mt19937 gen(rd());
+static std::mt19937 gen(42);
 static std::uniform_real_distribution<> dis(0.0, 1.0);
 
-double sampleExponential(double rate) {
+// meanInterval is the average number of time units between actions, matching
+// the "time units/action" wording of the simulation prompts.
+double sampleExponential(double meanInterval) {
   double U = dis(gen);
-  return -std::log(U) / rate;
+  return -std::log(U) * meanInterval;
 }
 
 Agent::Agent(TradeDispatcher &tradeDispatcher, MatchingEngine &matchingEngine,
-             AgentStrategy &&strategy, ClientRef clientRef, double rate)
-    : strategy_(std::move(strategy)), clientRef_(clientRef), rate_(rate),
+             AgentStrategy &&strategy, ClientRef clientRef,
+             double meanActionInterval)
+    : strategy_(std::move(strategy)), clientRef_(clientRef),
+      meanActionInterval_(meanActionInterval),
       matchingEngine_(matchingEngine), tradeDispatcher_(tradeDispatcher) {
+  activeOrders_.reserve(512); // avoid rehashing on the outgoing hot path
   tradeDispatcher_.Attach(this);
 };
 
@@ -35,29 +39,17 @@ Agent::~Agent() {
   tradeDispatcher_.Detach(this);
 }
 
-void Agent::AddActiveOrder(PoolIndex index, Order *order) {
-  std::unique_lock<std::shared_mutex> lock(mtx_);
-  (activeOrders_)[index] = order;
-}
-
-void Agent::RemoveActiveOrder(PoolIndex index) {
-  std::unique_lock<std::shared_mutex> lock(mtx_);
-  activeOrders_.erase(index);
-}
-
-std::unordered_map<PoolIndex, Order *> Agent::GetActiveOrders() const {
-  std::shared_lock<std::shared_mutex> lock(mtx_);
-  return activeOrders_;
-}
-
 OrderPtrs Agent::Act() {
+  // Apply pending ACK/retire events first so strategies see current records
+  // (and so records of strategies that never cancel still get retired).
+  DrainOrderEvents();
   return std::visit(
       [&](auto &activeStrategy) { return activeStrategy.Act(this); },
       strategy_);
 }
 
-double Agent::ScheduleNextAction(std::uint64_t currentTime) {
-  return currentTime + sampleExponential(rate_);
+double Agent::ScheduleNextAction(double currentTime) {
+  return currentTime + sampleExponential(meanActionInterval_);
 }
 
 void Agent::PushOrder(Order *order) {
@@ -70,8 +62,24 @@ void Agent::PushOrder(Order *order) {
   }
 }
 
+void Agent::TrackOrder(Order *order) {
+  order->SetTimestamp(nextSeq_);
+  activeOrders_.emplace(
+      nextSeq_, ActiveOrder{0, order->GetPrice(), order->GetSide()});
+  ++nextSeq_;
+}
+
+void Agent::EnqueueToEngine(Order *order) {
+  while (!matchingEngine_.orders_.Push(order)) {
+    // Backpressure: keep consuming our own order events so the incoming
+    // thread (and transitively the engine) can always make progress.
+    DrainOrderEvents();
+    _mm_pause();
+  }
+}
+
 void Agent::PushLimitOrder(Order *order) {
-  AddActiveOrder(order->GetIndex(), order);
+  TrackOrder(order);
   if (order->GetSide() == Side::Sell) {
     units_.fetch_sub(order->GetRemainingQuantity(), std::memory_order_relaxed);
   } else {
@@ -81,12 +89,11 @@ void Agent::PushLimitOrder(Order *order) {
     availableCash_.fetch_sub(totalCents, std::memory_order_relaxed);
     reservedCash_.fetch_add(totalCents, std::memory_order_relaxed);
   }
-  while (!matchingEngine_.orders_.Push(order)) {
-  }
+  EnqueueToEngine(order);
 }
 
 void Agent::PushMarketOrder(Order *order) {
-  AddActiveOrder(order->GetIndex(), order);
+  TrackOrder(order);
   if (order->GetSide() == Side::Sell) {
     units_.fetch_sub(order->GetRemainingQuantity(), std::memory_order_relaxed);
   } else {
@@ -96,35 +103,80 @@ void Agent::PushMarketOrder(Order *order) {
     availableCash_.fetch_sub(totalCents, std::memory_order_relaxed);
     reservedCash_.fetch_add(totalCents, std::memory_order_relaxed);
   }
-  while (!matchingEngine_.orders_.Push(order)) {
-  }
+  EnqueueToEngine(order);
 }
 
-void Agent::PushCancelOrder(Order *order) {
-  while (!matchingEngine_.orders_.Push(order)) {
-  }
-}
+void Agent::PushCancelOrder(Order *order) { EnqueueToEngine(order); }
 
+// Matching engine thread (via TradeDispatcher).
 void Agent::PushTrade(TradeInfo &&tradeInfo) {
   while (!incomingBuffer_.Push(std::move(tradeInfo))) {
+    _mm_pause();
   }
 }
 
-void Agent::PopTrade() {
-  TradeInfo tradeInfo;
-  if (incomingBuffer_.Pop(tradeInfo)) {
-    if (tradeInfo.type == ExecutionType::FULL ||
-        tradeInfo.type == ExecutionType::CANCEL) {
-      RemoveActiveOrder(tradeInfo.order.GetIndex());
-    }
-    if (tradeInfo.type == ExecutionType::CANCEL) {
-      PopCancelOrderTrade(tradeInfo);
-    } else if (tradeInfo.orderType == OrderType::MARKET) {
-      PopMarketOrderTrade(tradeInfo);
-    } else if (tradeInfo.orderType == OrderType::LIMIT) {
-      PopLimitOrderTrade(tradeInfo);
-    }
+// Incoming thread. Never blocks: order events that don't fit the ring spill
+// into a mutex-guarded overflow the outgoing thread collects on drain.
+void Agent::PushOrderEvent(OrderEvent &&event) {
+  if (orderEvents_.Push(event)) {
+    return;
   }
+  std::lock_guard<std::mutex> lock(overflowMtx_);
+  orderEventOverflow_.push_back(event);
+  hasOverflow_.store(true, std::memory_order_release);
+}
+
+// Outgoing thread.
+void Agent::DrainOrderEvents() {
+  auto apply = [&](const OrderEvent &event) {
+    if (event.retire) {
+      activeOrders_.erase(event.seq);
+    } else {
+      auto it = activeOrders_.find(event.seq);
+      if (it != activeOrders_.end()) {
+        it->second.id = event.id;
+      }
+    }
+  };
+  OrderEvent event;
+  while (orderEvents_.Pop(event)) {
+    apply(event);
+  }
+  if (hasOverflow_.load(std::memory_order_acquire)) {
+    std::vector<OrderEvent> spilled;
+    {
+      std::lock_guard<std::mutex> lock(overflowMtx_);
+      spilled.swap(orderEventOverflow_);
+      hasOverflow_.store(false, std::memory_order_release);
+    }
+    for (const OrderEvent &spilledEvent : spilled) {
+      apply(spilledEvent);
+    }
+    // Ring entries pushed after the spill still drain on the next call.
+  }
+}
+
+bool Agent::PopTrade() {
+  TradeInfo tradeInfo;
+  if (!incomingBuffer_.Pop(tradeInfo)) {
+    return false;
+  }
+  if (tradeInfo.type == ExecutionType::ACK) {
+    PushOrderEvent({tradeInfo.clientSeq, tradeInfo.orderId, false});
+    return true;
+  }
+  if (tradeInfo.type == ExecutionType::FULL ||
+      tradeInfo.type == ExecutionType::CANCEL) {
+    PushOrderEvent({tradeInfo.clientSeq, tradeInfo.orderId, true});
+  }
+  if (tradeInfo.type == ExecutionType::CANCEL) {
+    PopCancelOrderTrade(tradeInfo);
+  } else if (tradeInfo.orderType == OrderType::MARKET) {
+    PopMarketOrderTrade(tradeInfo);
+  } else if (tradeInfo.orderType == OrderType::LIMIT) {
+    PopLimitOrderTrade(tradeInfo);
+  }
+  return true;
 }
 
 void Agent::PopLimitOrderTrade(TradeInfo &tradeInfo) {
@@ -138,7 +190,7 @@ void Agent::PopLimitOrderTrade(TradeInfo &tradeInfo) {
     int64_t totalCents =
         static_cast<std::int64_t>(priceCents * tradeInfo.quantity);
     int64_t reservedPrice =
-        static_cast<std::int64_t>(tradeInfo.order.GetPrice() * 100);
+        static_cast<std::int64_t>(tradeInfo.orderPrice * 100);
     int64_t reservedCents =
         static_cast<std::int64_t>(reservedPrice * tradeInfo.quantity);
     reservedCash_.fetch_sub(reservedCents, std::memory_order_relaxed);
@@ -159,7 +211,7 @@ void Agent::PopMarketOrderTrade(TradeInfo &tradeInfo) {
     int64_t totalCents =
         static_cast<std::int64_t>(priceCents * tradeInfo.quantity);
     int64_t reservedPrice =
-        static_cast<std::int64_t>(tradeInfo.order.GetPrice() * 100);
+        static_cast<std::int64_t>(tradeInfo.orderPrice * 100);
     int64_t reservedCents =
         static_cast<std::int64_t>(reservedPrice * tradeInfo.quantity);
     reservedCash_.fetch_sub(reservedCents, std::memory_order_relaxed);
@@ -182,9 +234,7 @@ void Agent::PopCancelOrderTrade(TradeInfo &tradeInfo) {
 }
 
 void Agent::PrintState() {
-  while (!incomingBuffer_.empty()) {
-    PopTrade();
-  }
+  ClearIncoming();
   std::cout << "-- Client Ref: " << clientRef_ << " --\n";
   std::cout << "Starting  Cash: $" << initialCash_ << '\n';
   std::cout << "Current   Cash: $" << availableCash_ + reservedCash_ << '\n';
@@ -195,10 +245,12 @@ void Agent::PrintState() {
   std::cout << "Current   Units: " << units_ << '\n' << '\n' << '\n';
 }
 
+// Only safe once the outgoing loop has stopped (shutdown/teardown path):
+// draining order events touches outgoing-thread state.
 void Agent::ClearIncoming() {
-  while (!incomingBuffer_.empty()) {
-    PopTrade();
+  while (PopTrade()) {
   }
+  DrainOrderEvents();
 }
 
 AgentInfo Agent::GetInfo() {
@@ -211,6 +263,10 @@ AgentInfo Agent::GetInfo() {
           return AgentInfo::Strategy::MARKETMAKER;
         else if constexpr (std::is_same_v<T, MomentumTrader>)
           return AgentInfo::Strategy::MOMENTUMTRADER;
+        else if constexpr (std::is_same_v<T, MeanReverter>)
+          return AgentInfo::Strategy::MEANREVERTER;
+        else if constexpr (std::is_same_v<T, Whale>)
+          return AgentInfo::Strategy::WHALE;
         else
           throw std::logic_error("Agent does not have a valid strategy");
       },

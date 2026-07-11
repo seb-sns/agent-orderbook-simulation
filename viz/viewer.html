@@ -1,0 +1,1023 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orderbook Replay</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --ink-1: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-3: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --s-random: #2a78d6;
+    --s-maker: #1baf7a;
+    --s-momentum: #eda100;
+    --s-reverter: #008300;
+    --s-whale: #4a3aa7;
+    --bid: #0ca30c;
+    --ask: #d03b3b;
+    --accent: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --ink-1: #ffffff;
+      --ink-2: #c3c2b7;
+      --ink-3: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --s-random: #3987e5;
+      --s-maker: #199e70;
+      --s-momentum: #c98500;
+      --s-reverter: #008300;
+      --s-whale: #9085e9;
+      --bid: #0ca30c;
+      --ask: #d03b3b;
+      --accent: #3987e5;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink-1);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 16px;
+  }
+  h1 { font-size: 16px; font-weight: 600; }
+  .sub { color: var(--ink-3); font-size: 12px; }
+  header.top {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  header.top .spacer { flex: 1; }
+  .legend { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
+  .legend-label { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+  .key { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .swatch.dot { border-radius: 50%; }
+  .swatch.bar { width: 14px; height: 7px; border-radius: 0 4px 4px 0; }
+  button, select, input[type=file]::file-selector-button {
+    font: inherit; font-size: 13px; color: var(--ink-1);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 12px; cursor: pointer;
+  }
+  select.small { font-size: 11px; padding: 2px 6px; border-radius: 6px; }
+  button:hover { border-color: var(--baseline); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #controls {
+    display: none; align-items: center; gap: 12px;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; flex-wrap: wrap;
+  }
+  #controls.on { display: flex; }
+  #scrub { flex: 1; min-width: 160px; accent-color: var(--accent); }
+  #speed { width: 130px; accent-color: var(--accent); }
+  .mono { font-variant-numeric: tabular-nums; }
+  #clock { color: var(--ink-2); font-size: 13px; min-width: 150px; }
+  #speedLabel { color: var(--ink-3); font-size: 12px; min-width: 120px; }
+  main {
+    display: none;
+    grid-template-columns: 270px minmax(0, 1fr) 300px;
+    grid-template-rows: minmax(0, 1fr) 250px;
+    gap: 12px; height: calc(100vh - 132px); min-height: 560px;
+  }
+  main.on { display: grid; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 14px;
+    display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  }
+  .card h2 { font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+  .card h2 .right { margin-left: auto; display: flex; gap: 10px; align-items: center; font-weight: 400; }
+  .card canvas { flex: 1; min-height: 0; width: 100%; }
+  #ladderCard { grid-column: 1; grid-row: 1 / 3; }
+  #chartCard { grid-column: 2; grid-row: 1; }
+  #swarmCard { grid-column: 2; grid-row: 2; }
+  #sideCol { grid-column: 3; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  #tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tile { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+  .tile .label { font-size: 11px; color: var(--ink-3); }
+  .tile .value { font-size: 18px; font-weight: 600; }
+  .tile .value.hero { font-size: 24px; }
+  #tapeCard { flex: 1; min-height: 0; }
+  #tapeWrap { flex: 1; overflow-y: auto; min-height: 0; }
+  table.tape { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.tape td, table.tape th { padding: 3px 4px; text-align: right; white-space: nowrap; }
+  table.tape th { color: var(--ink-3); font-weight: 500; position: sticky; top: 0; background: var(--surface-1); }
+  table.tape td:first-child, table.tape th:first-child { text-align: left; }
+  table.tape tr { border-bottom: 1px solid var(--grid); }
+  .side-b { color: var(--bid); font-weight: 600; }
+  .side-s { color: var(--ask); font-weight: 600; }
+  #agentTableWrap { flex: 1; overflow-y: auto; min-height: 0; display: none; }
+  #agentTableWrap.on { display: block; }
+  #swarmCanvas.off { display: none; }
+  #recMeta { font-size: 11px; color: var(--ink-3); }
+  #tip {
+    position: fixed; pointer-events: none; display: none; z-index: 10;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.14);
+    padding: 6px 9px; font-size: 12px; color: var(--ink-1); max-width: 260px;
+  }
+  #tip .muted { color: var(--ink-3); }
+  #drop {
+    border: 1.5px dashed var(--baseline); border-radius: 14px;
+    background: var(--surface-1);
+    padding: 60px 30px; text-align: center; margin-top: 30px;
+  }
+  #drop h2 { font-size: 15px; margin-bottom: 8px; }
+  #drop p { color: var(--ink-2); font-size: 13px; margin: 4px 0; }
+  #drop code {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--page); border: 1px solid var(--grid);
+    border-radius: 6px; padding: 1px 6px;
+  }
+  #drop .pick { margin-top: 18px; }
+  @media (max-width: 1100px) {
+    main.on { grid-template-columns: 1fr; grid-template-rows: none; height: auto; }
+    #ladderCard, #sideCol { grid-row: auto; }
+    .card { height: 300px; }
+    #ladderCard { height: 460px; }
+    #sideCol { height: auto; }
+  }
+</style>
+
+<header class="top">
+  <h1>Orderbook Replay</h1>
+  <span class="sub" id="fileMeta"></span>
+  <span class="spacer"></span>
+  <div class="legend" id="legend" style="display:none">
+    <span class="legend-label">Agents</span>
+    <span class="key"><span class="swatch dot" style="background:var(--s-random)"></span>Random</span>
+    <span class="key"><span class="swatch dot" style="background:var(--s-maker)"></span>Market Maker</span>
+    <span class="key"><span class="swatch dot" style="background:var(--s-momentum)"></span>Momentum</span>
+    <span class="key"><span class="swatch dot" style="background:var(--s-reverter)"></span>Mean Reverter</span>
+    <span class="key"><span class="swatch dot" style="background:var(--s-whale)"></span>Whale</span>
+  </div>
+  <button id="openBtn" style="display:none">Open another log…</button>
+</header>
+
+<div id="controls">
+  <button id="playBtn" class="primary">Play</button>
+  <input id="scrub" type="range" min="0" max="10000" value="0">
+  <span id="clock" class="mono"></span>
+  <input id="speed" type="range" min="-1.6" max="1.6" step="0.05" value="0">
+  <span id="speedLabel" class="mono"></span>
+</div>
+
+<main id="main">
+  <section class="card" id="ladderCard">
+    <h2>Depth ladder
+      <span class="right">
+        <span class="key"><span class="swatch bar" style="background:var(--bid)"></span>bids</span>
+        <span class="key"><span class="swatch bar" style="background:var(--ask)"></span>asks</span>
+        <select id="zoomSel" class="small" title="price levels aggregated per row">
+          <option value="0">auto</option>
+          <option value="1">1p</option>
+          <option value="2">2p</option>
+          <option value="5">5p</option>
+          <option value="10">10p</option>
+        </select>
+      </span>
+    </h2>
+    <canvas id="ladderCanvas"></canvas>
+  </section>
+  <section class="card" id="chartCard">
+    <h2>Trade price
+      <span class="right">
+        <span class="key"><span class="swatch dot" style="background:var(--bid)"></span>buys</span>
+        <span class="key"><span class="swatch dot" style="background:var(--ask)"></span>sells</span>
+        <select id="chartModeSel" class="small" title="chart style">
+          <option value="line">line</option>
+          <option value="candles">candles</option>
+        </select>
+        <span class="sub" id="chartHint">hover for values</span>
+      </span>
+    </h2>
+    <canvas id="chartCanvas"></canvas>
+  </section>
+  <section class="card" id="swarmCard">
+    <h2>Agents — inventory vs. P&amp;L
+      <span class="right">
+        <span class="sub">dots pulse when an agent trades</span>
+        <button id="tableBtn">Table</button>
+      </span>
+    </h2>
+    <canvas id="swarmCanvas"></canvas>
+    <div id="agentTableWrap"></div>
+  </section>
+  <aside id="sideCol">
+    <section class="card">
+      <h2>Market state</h2>
+      <div id="tiles"></div>
+    </section>
+    <section class="card" id="tapeCard">
+      <h2>Trade tape</h2>
+      <div id="tapeWrap"></div>
+    </section>
+    <section class="card" style="flex:0 0 auto">
+      <h2>Recording</h2>
+      <div id="recMeta"></div>
+    </section>
+  </aside>
+</main>
+
+<div id="drop">
+  <h2>Drop a <code>.mktviz</code> recording here</h2>
+  <p>Build the viz target and run it — the normal <code>simulation</code> binary is untouched:</p>
+  <p><code>cmake --build build --target simulation_viz</code> then <code>build/simulation_viz</code></p>
+  <p>It writes <code>simulation.mktviz</code> next to the binary. Drop that file here, or</p>
+  <p class="pick"><input type="file" id="filePick" accept=".mktviz"></p>
+</div>
+
+<div id="tip"></div>
+
+<script>
+'use strict';
+
+/* ---------- theme colors (re-read when the scheme flips) ---------- */
+let C = {};
+function readColors() {
+  const s = getComputedStyle(document.documentElement);
+  const g = n => s.getPropertyValue(n).trim();
+  C = {
+    surface: g('--surface-1'), ink1: g('--ink-1'), ink2: g('--ink-2'),
+    ink3: g('--ink-3'), grid: g('--grid'), baseline: g('--baseline'),
+    bid: g('--bid'), ask: g('--ask'),
+    strat: [g('--s-random'), g('--s-maker'), g('--s-momentum'),
+            g('--s-reverter'), g('--s-whale')],
+  };
+}
+readColors();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readColors(); requestDraw(); });
+
+const STRAT_NAMES = ['Random', 'Market Maker', 'Momentum', 'Mean Reverter', 'Whale'];
+const EV_ADD = 0, EV_TRADE = 1, EV_CANCEL = 2;
+const N_LEVELS = 2001;
+
+/* ---------- recording + derived data ---------- */
+let rec = null;   // parsed file
+let st = null;    // replay state
+
+function parseFile(buf, name) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 64) throw new Error('File too small to be a .mktviz log');
+  let magic = '';
+  for (let i = 0; i < 8; i++) magic += String.fromCharCode(dv.getUint8(i));
+  if (magic !== 'MKTVIZ01') throw new Error('Not a MKTVIZ01 file (bad magic)');
+  const nAgents = dv.getUint32(12, true);
+  const initialCash = Number(dv.getBigInt64(16, true));
+  const initialUnits = Number(dv.getBigInt64(24, true));
+  const minPrice = dv.getFloat64(32, true);
+  const tick = dv.getFloat64(40, true);
+  let eventCount = Number(dv.getBigUint64(48, true));
+  const dropped = Number(dv.getBigUint64(56, true));
+
+  let off = 64;
+  const agentStrat = new Uint8Array(nAgents);
+  const refToIdx = new Map();
+  for (let i = 0; i < nAgents; i++) {
+    refToIdx.set(dv.getUint32(off, true), i);
+    agentStrat[i] = dv.getUint8(off + 4);
+    off += 8;
+  }
+  const avail = Math.floor((buf.byteLength - off) / 32);
+  if (eventCount === 0 || eventCount > avail) eventCount = avail; // header not patched (crash) — trust the bytes
+
+  const n = eventCount;
+  const ts = new Float64Array(n), ref = new Uint32Array(n), qty = new Float64Array(n),
+        cp = new Uint32Array(n), pidx = new Uint16Array(n),
+        typ = new Uint8Array(n), side = new Uint8Array(n);
+  let nTrades = 0;
+  for (let i = 0; i < n; i++) {
+    ts[i] = Number(dv.getBigUint64(off, true));
+    ref[i] = dv.getUint32(off + 16, true);
+    qty[i] = dv.getUint32(off + 20, true);
+    cp[i] = dv.getUint32(off + 24, true);
+    pidx[i] = dv.getUint16(off + 28, true);
+    typ[i] = dv.getUint8(off + 30);
+    side[i] = dv.getUint8(off + 31);
+    if (typ[i] === EV_TRADE) nTrades++;
+    off += 32;
+  }
+
+  // trade series for the price chart / tape
+  const tTs = new Float64Array(nTrades), tPrice = new Float32Array(nTrades),
+        tQty = new Float32Array(nTrades), tSide = new Uint8Array(nTrades),
+        tAgg = new Uint32Array(nTrades), tRest = new Uint32Array(nTrades);
+  let k = 0, pMin = Infinity, pMax = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (typ[i] !== EV_TRADE) continue;
+    const p = minPrice + pidx[i] * tick;
+    tTs[k] = ts[i]; tPrice[k] = p; tQty[k] = qty[i];
+    tSide[k] = side[i]; tAgg[k] = ref[i]; tRest[k] = cp[i];
+    if (p < pMin) pMin = p; if (p > pMax) pMax = p;
+    k++;
+  }
+  if (!isFinite(pMin)) { pMin = minPrice; pMax = minPrice + 2000 * tick; }
+
+  const duration = n ? ts[n - 1] : 1;
+
+  const r = { name, nAgents, initialCash, initialUnits, minPrice, tick, dropped,
+              n, ts, ref, qty, cp, pidx, typ, side, refToIdx, agentStrat,
+              nTrades, tTs, tPrice, tQty, tSide, tAgg, tRest, pMin, pMax, duration };
+  r.keyframes = buildKeyframes(r);
+  r.buckets = buildBuckets(r);
+  return r;
+}
+
+/* keyframes make scrubbing O(K) instead of O(n). The same pass records the
+   run-wide inventory/P&L extents (r.maxInv, r.maxPnl) so the swarm plot can
+   use one fixed scale instead of rescaling every frame. */
+function buildKeyframes(r) {
+  const stride = Math.max(20000, Math.ceil(r.n / 240));
+  const s = freshState(r);
+  const frames = [snapshot(s, 0, 0)];
+  let tc = 0, maxInv = 0, maxPnl = 0;
+  for (let i = 0; i < r.n; i++) {
+    const wasTrade = applyEvent(r, s, i);
+    tc += wasTrade;
+    if (wasTrade) {
+      const price = r.minPrice + r.pidx[i] * r.tick;
+      const bIdx = r.refToIdx.get(r.side[i] === 0 ? r.ref[i] : r.cp[i]);
+      const sIdx = r.refToIdx.get(r.side[i] === 0 ? r.cp[i] : r.ref[i]);
+      for (const a of [bIdx, sIdx]) {
+        if (a === undefined) continue;
+        const inv = Math.abs(s.unitsD[a]);
+        if (inv > maxInv) maxInv = inv;
+        const p = Math.abs(s.cashD[a] + s.unitsD[a] * price);
+        if (p > maxPnl) maxPnl = p;
+      }
+    }
+    if ((i + 1) % stride === 0) {
+      frames.push(snapshot(s, i + 1, tc));
+      // mark-to-market sweep: non-participants' P&L also moves when price does
+      if (s.lastPidx >= 0) {
+        const price = r.minPrice + s.lastPidx * r.tick;
+        for (let a = 0; a < r.nAgents; a++) {
+          const p = Math.abs(s.cashD[a] + s.unitsD[a] * price);
+          if (p > maxPnl) maxPnl = p;
+        }
+      }
+    }
+  }
+  r.maxInv = maxInv;
+  r.maxPnl = maxPnl;
+  return frames;
+}
+function snapshot(s, cursor, tradeCursor) {
+  return { cursor, tradeCursor, lastPidx: s.lastPidx,
+           bids: s.bids.slice(), asks: s.asks.slice(),
+           cashD: s.cashD.slice(), unitsD: s.unitsD.slice() };
+}
+function freshState(r) {
+  return {
+    bids: new Float64Array(N_LEVELS), asks: new Float64Array(N_LEVELS),
+    cashD: new Float64Array(r.nAgents), unitsD: new Float64Array(r.nAgents),
+    lastActive: new Float64Array(r.nAgents).fill(-1e18),
+    lastPidx: -1, cursor: 0, tradeCursor: 0,
+  };
+}
+/* returns 1 if the event was a trade */
+function applyEvent(r, s, i) {
+  const pi = r.pidx[i], q = r.qty[i], sd = r.side[i];
+  const t = r.typ[i];
+  const aIdx = r.refToIdx.get(r.ref[i]);
+  if (aIdx !== undefined) s.lastActive[aIdx] = r.ts[i];
+  if (t === EV_ADD) {
+    (sd === 0 ? s.bids : s.asks)[pi] += q;
+  } else if (t === EV_CANCEL) {
+    const b = (sd === 0 ? s.bids : s.asks);
+    b[pi] = Math.max(0, b[pi] - q);
+  } else {
+    const b = (sd === 0 ? s.asks : s.bids); // resting side is opposite the aggressor
+    b[pi] = Math.max(0, b[pi] - q);
+    const price = r.minPrice + pi * r.tick;
+    const bIdx = r.refToIdx.get(sd === 0 ? r.ref[i] : r.cp[i]);
+    const sIdx = r.refToIdx.get(sd === 0 ? r.cp[i] : r.ref[i]);
+    if (bIdx !== undefined) { s.cashD[bIdx] -= q * price; s.unitsD[bIdx] += q; s.lastActive[bIdx] = r.ts[i]; }
+    if (sIdx !== undefined) { s.cashD[sIdx] += q * price; s.unitsD[sIdx] -= q; s.lastActive[sIdx] = r.ts[i]; }
+    s.lastPidx = pi;
+    return 1;
+  }
+  return 0;
+}
+
+/* per-pixel price buckets so drawing the line is O(width), not O(trades) */
+function buildBuckets(r) {
+  const NB = 2048;
+  const min = new Float32Array(NB).fill(NaN), max = new Float32Array(NB).fill(NaN),
+        last = new Float32Array(NB).fill(NaN), firstIdx = new Int32Array(NB).fill(-1);
+  const w = r.duration / NB;
+  for (let i = 0; i < r.nTrades; i++) {
+    const b = Math.min(NB - 1, Math.floor(r.tTs[i] / w));
+    const p = r.tPrice[i];
+    if (firstIdx[b] < 0) { firstIdx[b] = i; min[b] = p; max[b] = p; }
+    else { if (p < min[b]) min[b] = p; if (p > max[b]) max[b] = p; }
+    last[b] = p;
+  }
+  return { NB, w, min, max, last, firstIdx };
+}
+
+/* ---------- playback ---------- */
+let playing = false, playTime = 0, speedMult = 1, lastFrame = 0, needDraw = false;
+let domDirty = false, lastDomAt = 0;
+const MAX_EVENTS_PER_FRAME = 150000; // beyond this, playback slows instead of stuttering
+
+function defaultNsPerMs() { return rec.duration / 45000; } // whole run in ~45s at 1×
+function seek(t) {
+  t = Math.max(0, Math.min(rec.duration, t));
+  if (t < playTime || !st) {
+    const kfs = rec.keyframes;
+    let lo = 0;
+    for (let i = kfs.length - 1; i >= 0; i--) {
+      const c = kfs[i].cursor;
+      if (c === 0 || (c > 0 && rec.ts[c - 1] <= t)) { lo = i; break; }
+    }
+    const kf = kfs[lo];
+    st = freshState(rec);
+    st.bids.set(kf.bids); st.asks.set(kf.asks);
+    st.cashD.set(kf.cashD); st.unitsD.set(kf.unitsD);
+    st.cursor = kf.cursor; st.tradeCursor = kf.tradeCursor; st.lastPidx = kf.lastPidx;
+  }
+  playTime = t;
+  advanceTo(t);
+  domDirty = true;
+}
+function advanceTo(t, maxEvents) {
+  let budget = maxEvents ?? Infinity;
+  while (st.cursor < rec.n && rec.ts[st.cursor] <= t) {
+    if (budget-- <= 0) return false;
+    st.tradeCursor += applyEvent(rec, st, st.cursor);
+    st.cursor++;
+  }
+  return true;
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!rec) return;
+  const dt = Math.min(100, now - lastFrame);
+  lastFrame = now;
+  if (playing) {
+    playTime += dt * defaultNsPerMs() * speedMult;
+    if (playTime >= rec.duration) { playTime = rec.duration; setPlaying(false); }
+    if (!advanceTo(playTime, MAX_EVENTS_PER_FRAME)) {
+      playTime = rec.ts[st.cursor]; // clock lags the wall: slow-mo, not stutter
+    }
+    needDraw = true;
+    domDirty = true;
+  }
+  if (needDraw) { needDraw = false; drawAll(); }
+  // DOM panels (tiles/tape/clock) rebuild at most ~10Hz — rebuilding them per
+  // canvas frame forces layout and makes playback choppy.
+  if (domDirty && now - lastDomAt > 100) {
+    lastDomAt = now;
+    domDirty = false;
+    updateDom();
+  }
+}
+requestAnimationFrame(t => { lastFrame = t; requestAnimationFrame(frame); });
+function requestDraw() { needDraw = true; }
+function setPlaying(p) {
+  playing = p;
+  document.getElementById('playBtn').textContent = p ? 'Pause' : (playTime >= rec.duration ? 'Replay' : 'Play');
+}
+
+/* ---------- helpers ---------- */
+const fmtP = p => '£' + p.toFixed(2);
+const fmtT = ns => (ns / 1e6).toFixed(1) + ' ms';
+const fmtN = n => n.toLocaleString('en-GB');
+function bestBid(s) { for (let i = N_LEVELS - 1; i >= 0; i--) if (s.bids[i] > 0) return i; return -1; }
+function bestAsk(s) { for (let i = 0; i < N_LEVELS; i++) if (s.asks[i] > 0) return i; return -1; }
+function priceOf(i) { return rec.minPrice + i * rec.tick; }
+
+function setupCanvas(cv) {
+  const dpr = devicePixelRatio || 1;
+  const rct = cv.getBoundingClientRect();
+  if (rct.width === 0) return null;
+  const W = Math.round(rct.width), H = Math.round(rct.height);
+  if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = '11px system-ui, sans-serif';
+  return { ctx, W, H };
+}
+
+/* ---------- depth ladder ---------- */
+let ladderCenter = 1000, ladderZoom = 0; // 0 = auto, else ticks per row
+const ladder = { rows: [] }; // hover hit-map
+function drawLadder() {
+  const cv = document.getElementById('ladderCanvas');
+  const c = setupCanvas(cv); if (!c) return;
+  const { ctx, W, H } = c;
+  const bb = bestBid(st), ba = bestAsk(st);
+  let target = ladderCenter;
+  if (bb >= 0 && ba >= 0) target = (bb + ba) / 2;
+  else if (st.lastPidx >= 0) target = st.lastPidx;
+  ladderCenter += (target - ladderCenter) * 0.2;
+  if (Math.abs(ladderCenter - target) < 0.01) ladderCenter = target;
+
+  const rowH = 9, perSide = Math.max(4, Math.floor((H / 2 - 14) / rowH));
+  // clamp the (smoothed) center so the touch levels always land on their side
+  let center = Math.round(ladderCenter);
+  if (ba >= 0) center = Math.min(center, ba - 1);
+  if (bb >= 0) center = Math.max(center, bb);
+  // bucket = ticks aggregated per row; auto keeps best bid/ask in the window
+  let bucket = ladderZoom;
+  if (bucket === 0) {
+    let needed = 25;
+    if (bb >= 0 && ba >= 0) needed = Math.max(needed, ba - center + 8, center - bb + 8);
+    bucket = Math.max(1, Math.ceil(needed / perSide));
+  }
+  const labelW = 46, barX = labelW + 6, barW = W - barX - 44;
+
+  const sumRange = (book, lo) => {
+    let q = 0;
+    for (let i = Math.max(0, lo); i < Math.min(N_LEVELS, lo + bucket); i++) q += book[i];
+    return q;
+  };
+
+  const midY = H / 2;
+  ctx.strokeStyle = C.baseline; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, midY + .5); ctx.lineTo(W, midY + .5); ctx.stroke();
+
+  // two passes: max quantity first, then draw
+  let maxQ = 1;
+  for (let k = 0; k < perSide; k++) {
+    maxQ = Math.max(maxQ, sumRange(st.asks, center + 1 + k * bucket),
+                          sumRange(st.bids, center - (k + 1) * bucket + 1));
+  }
+
+  ladder.rows = [];
+  const drawSide = (book, col, dir, touch) => {
+    for (let k = 0; k < perSide; k++) {
+      const lo = dir < 0 ? center - (k + 1) * bucket + 1 : center + 1 + k * bucket;
+      if (lo + bucket <= 0 || lo >= N_LEVELS) continue;
+      const q = sumRange(book, lo);
+      const y = dir < 0 ? midY + 4 + k * rowH : midY - 4 - (k + 1) * rowH;
+      const edge = dir < 0 ? lo : lo + bucket - 1;          // tick furthest from mid
+      if (k % 5 === 4) {                                    // sparse tick labels
+        ctx.fillStyle = C.ink3; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(priceOf(edge).toFixed(2), 2, y + rowH / 2);
+      }
+      if (q > 0) {
+        const w = Math.max(1.5, (q / maxQ) * barW);
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.roundRect(barX, y + 1, w, rowH - 3, [0, 4, 4, 0]);
+        ctx.fill();
+        ladder.rows.push({ y, h: rowH, lo, hi: lo + bucket - 1, q, side: dir < 0 ? 'Bid' : 'Ask' });
+        // direct label on the row holding the touch (selective)
+        if (touch >= lo && touch < lo + bucket) {
+          ctx.fillStyle = C.ink2; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+          ctx.fillText(`${fmtN(q)} @ ${priceOf(touch).toFixed(2)}`, W - 4, y + rowH / 2);
+        }
+      }
+    }
+  };
+  drawSide(st.asks, C.ask, +1, ba);
+  drawSide(st.bids, C.bid, -1, bb);
+
+  if (bucket > 1) {
+    ctx.fillStyle = C.ink3; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+    ctx.fillText(`${bucket} levels/row`, W - 4, H - 2);
+  }
+}
+
+/* ---------- price chart ---------- */
+const chart = { padL: 46, padR: 10, padT: 8, padB: 22, hoverX: -1, mode: 'line' };
+/* one candle = `per` consecutive fine buckets, clamped to the playhead bucket.
+   open is the first trade in range (not carried), so gaps stay honest. */
+function candleAt(c0, per, maxB) {
+  const bk = rec.buckets;
+  const c1 = Math.min(c0 + per - 1, maxB);
+  let open = NaN, close = NaN, hi = -Infinity, lo = Infinity;
+  for (let b = c0; b <= c1; b++) {
+    if (bk.firstIdx[b] < 0) continue;
+    if (isNaN(open)) open = rec.tPrice[bk.firstIdx[b]];
+    if (bk.max[b] > hi) hi = bk.max[b];
+    if (bk.min[b] < lo) lo = bk.min[b];
+    close = bk.last[b];
+  }
+  return isNaN(open) ? null : { open, hi, lo, close, c0, c1 };
+}
+function chartYDomain() {
+  const pad = Math.max((rec.pMax - rec.pMin) * 0.08, rec.tick * 5);
+  return [rec.pMin - pad, rec.pMax + pad];
+}
+function drawChart() {
+  const cv = document.getElementById('chartCanvas');
+  const c = setupCanvas(cv); if (!c) return;
+  const { ctx, W, H } = c;
+  const { padL, padR, padT, padB } = chart;
+  const iW = W - padL - padR, iH = H - padT - padB;
+  const [y0, y1] = chartYDomain();
+  const xOf = t => padL + (t / rec.duration) * iW;
+  const yOf = p => padT + (1 - (p - y0) / (y1 - y0)) * iH;
+  chart.xOf = xOf; chart.yOf = yOf; chart.iW = iW;
+
+  // recessive grid + axis labels
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+  ctx.fillStyle = C.ink3; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const nTicks = 4;
+  for (let i = 0; i <= nTicks; i++) {
+    const p = y0 + (i / nTicks) * (y1 - y0), y = Math.round(yOf(p)) + .5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillText(p.toFixed(2), padL - 6, y);
+  }
+  ctx.textBaseline = 'top';
+  for (let i = 0; i <= 4; i++) {
+    const t = (i / 4) * rec.duration;
+    ctx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center';
+    ctx.fillText(fmtT(t), xOf(t), H - padB + 6);
+  }
+
+  const bk = rec.buckets;
+  const maxB = Math.min(bk.NB - 1, Math.floor(playTime / bk.w));
+  // candles merge fine buckets so each body stays ≥ ~5px at any width
+  const candlesPer = Math.max(1, Math.ceil(bk.NB / Math.max(16, Math.floor(iW / 7))));
+  chart.candlesPer = candlesPer;
+  if (chart.mode === 'candles') {
+    for (let c0 = 0; c0 <= maxB; c0 += candlesPer) {
+      const cd = candleAt(c0, candlesPer, maxB);
+      if (!cd) continue;
+      const x0 = xOf(cd.c0 * bk.w), x1 = xOf((cd.c0 + candlesPer) * bk.w);
+      const cx = (x0 + x1) / 2;
+      ctx.strokeStyle = ctx.fillStyle = cd.close >= cd.open ? C.bid : C.ask;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(cx, yOf(cd.hi)); ctx.lineTo(cx, yOf(cd.lo)); ctx.stroke();
+      const yO = yOf(Math.max(cd.open, cd.close)), yC = yOf(Math.min(cd.open, cd.close));
+      const bodyW = Math.max(1.5, x1 - x0 - 2); // 2px surface gap between bodies
+      ctx.beginPath();
+      ctx.roundRect(cx - bodyW / 2, yO, bodyW, Math.max(1.5, yC - yO), 1.5);
+      ctx.fill();
+    }
+  } else {
+    // price line from per-pixel buckets, up to the playhead
+    ctx.strokeStyle = C.ink2; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath();
+    let started = false, lastP = NaN;
+    for (let b = 0; b <= maxB; b++) {
+      if (bk.firstIdx[b] < 0) continue;
+      const x = xOf((b + 0.5) * bk.w);
+      if (!started) { ctx.moveTo(x, yOf(bk.last[b])); started = true; }
+      else {
+        ctx.lineTo(x, yOf(lastP));       // step: carry previous close into the bucket
+        ctx.lineTo(x, yOf(bk.min[b]));   // bucket range
+        ctx.lineTo(x, yOf(bk.max[b]));
+        ctx.lineTo(x, yOf(bk.last[b]));
+      }
+      lastP = bk.last[b];
+    }
+    ctx.stroke();
+  }
+
+  // recent trades as side-colored dots with a surface ring
+  const nDots = 24;
+  for (let i = Math.max(0, st.tradeCursor - nDots); i < st.tradeCursor; i++) {
+    const age = (st.tradeCursor - i) / nDots;
+    ctx.globalAlpha = 1 - age * 0.75;
+    const x = xOf(rec.tTs[i]), y = yOf(rec.tPrice[i]);
+    ctx.fillStyle = C.surface;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
+    ctx.fillStyle = rec.tSide[i] === 0 ? C.bid : C.ask;
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // playhead
+  const px = Math.round(xOf(playTime)) + .5;
+  ctx.strokeStyle = C.baseline;
+  ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, H - padB); ctx.stroke();
+
+  // last-price end label (selective direct label)
+  if (st.tradeCursor > 0) {
+    const p = rec.tPrice[st.tradeCursor - 1];
+    ctx.fillStyle = C.ink1; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(fmtP(p), Math.min(px + 6, W - 46), yOf(p));
+  }
+
+  // hover crosshair
+  if (chart.hoverX >= padL && chart.hoverX <= W - padR) {
+    const t = ((chart.hoverX - padL) / iW) * rec.duration;
+    const x = Math.round(chart.hoverX) + .5;
+    ctx.strokeStyle = C.grid;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
+    const b = Math.min(bk.NB - 1, Math.floor(t / bk.w));
+    if (chart.mode === 'candles') {
+      const c0 = Math.floor(b / chart.candlesPer) * chart.candlesPer;
+      const cd = c0 <= maxB ? candleAt(c0, chart.candlesPer, maxB) : null;
+      if (cd) {
+        const y = yOf(cd.close);
+        ctx.fillStyle = C.surface; ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
+        ctx.fillStyle = C.ink1; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill();
+        showTip(chart.tipX, chart.tipY,
+          `<span class="muted">${fmtT(cd.c0 * bk.w)}–${fmtT((cd.c0 + chart.candlesPer) * bk.w)}</span><br>` +
+          `O ${fmtP(cd.open)} · H ${fmtP(cd.hi)}<br>L ${fmtP(cd.lo)} · C ${fmtP(cd.close)}`);
+      }
+    } else {
+      let bb = b; while (bb >= 0 && bk.firstIdx[bb] < 0) bb--;
+      if (bb >= 0) {
+        const y = yOf(bk.last[bb]);
+        ctx.fillStyle = C.surface; ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
+        ctx.fillStyle = C.ink1; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill();
+        showTip(chart.tipX, chart.tipY,
+          `<span class="muted">${fmtT(t)}</span><br>last ${fmtP(bk.last[bb])}` +
+          (bk.min[bb] !== bk.max[bb] ? `<br><span class="muted">bucket ${fmtP(bk.min[bb])}–${fmtP(bk.max[bb])}</span>` : ''));
+      }
+    }
+  }
+}
+
+/* ---------- agent swarm ---------- */
+const swarm = { dots: [], mX: 0, mY: 0 };
+/* snap up to 1-2-5 so the axis lands on a readable number */
+function niceCeil(v) {
+  if (!(v > 0)) return 10;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  const m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+}
+function drawSwarm() {
+  const cv = document.getElementById('swarmCanvas');
+  if (cv.classList.contains('off')) return;
+  const c = setupCanvas(cv); if (!c) return;
+  const { ctx, W, H } = c;
+  const padL = 40, padB = 16, padT = 6, padR = 10;
+  const iW = W - padL - padR, iH = H - padT - padB;
+  const last = st.lastPidx >= 0 ? priceOf(st.lastPidx) : rec.minPrice + 1000 * rec.tick;
+
+  // fixed scale from the precomputed run-wide extents; a per-frame max made
+  // the plot rescale (jitter) constantly. Grow-only fallback covers the rare
+  // moment the sampled extents underestimate.
+  let needX = 0, needY = 0;
+  const pnl = new Float64Array(rec.nAgents);
+  for (let i = 0; i < rec.nAgents; i++) {
+    pnl[i] = st.cashD[i] + st.unitsD[i] * last;
+    needX = Math.max(needX, Math.abs(st.unitsD[i]));
+    needY = Math.max(needY, Math.abs(pnl[i]));
+  }
+  if (needX > swarm.mX) swarm.mX = niceCeil(needX * 1.15);
+  if (needY > swarm.mY) swarm.mY = niceCeil(needY * 1.15);
+  const mX = swarm.mX, mY = swarm.mY;
+  const xOf = u => padL + ((u + mX) / (2 * mX)) * iW;
+  const yOf = p => padT + (1 - (p + mY) / (2 * mY)) * iH;
+
+  // zero axes (hairline) + muted extent labels
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, Math.round(yOf(0)) + .5); ctx.lineTo(W - padR, Math.round(yOf(0)) + .5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(Math.round(xOf(0)) + .5, padT); ctx.lineTo(Math.round(xOf(0)) + .5, H - padB); ctx.stroke();
+  ctx.fillStyle = C.ink3;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText('inventory Δ →', W / 2, H - padB + 3);
+  ctx.save(); ctx.translate(10, H / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textBaseline = 'middle'; ctx.fillText('P&L →', 0, 0); ctx.restore();
+  // extent labels: the fixed scale should be legible, not implied
+  ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+  ctx.fillText('+' + fmtN(mX), W - padR, yOf(0) - 3);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('+£' + fmtN(Math.round(mY)), xOf(0) + 5, padT);
+
+  // pulse window scales with playback speed so pulses last ~0.5s of wall time
+  const pulseNs = 500 * defaultNsPerMs() * speedMult;
+  swarm.dots = [];
+  for (let i = 0; i < rec.nAgents; i++) {
+    const x = xOf(st.unitsD[i]), y = yOf(pnl[i]);
+    const col = C.strat[rec.agentStrat[i]] || C.ink3;
+    const age = playTime - st.lastActive[i];
+    if (age >= 0 && age < pulseNs && pulseNs > 0) {
+      const f = age / pulseNs;
+      ctx.globalAlpha = (1 - f) * 0.5;
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 6 + f * 14, 0, 7); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = C.surface;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();  // 2px surface ring
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill();
+    swarm.dots.push({ x, y, i, pnl: pnl[i] });
+  }
+}
+
+/* ---------- DOM panels ---------- */
+function tile(label, value, hero, cls) {
+  return `<div class="tile"><div class="label">${label}</div>` +
+         `<div class="value ${hero ? 'hero' : ''} ${cls || ''}">${value}</div></div>`;
+}
+let lastTapeCursor = -1, lastTableAt = 0;
+function updateDom() {
+  const bb = bestBid(st), ba = bestAsk(st);
+  const mid = bb >= 0 && ba >= 0 ? (priceOf(bb) + priceOf(ba)) / 2 : (st.lastPidx >= 0 ? priceOf(st.lastPidx) : NaN);
+  const spread = bb >= 0 && ba >= 0 ? priceOf(ba) - priceOf(bb) : NaN;
+  let bidDepth = 0, askDepth = 0;
+  for (let i = 0; i < N_LEVELS; i++) { bidDepth += st.bids[i]; askDepth += st.asks[i]; }
+
+  document.getElementById('tiles').innerHTML =
+    tile('Mid price', isNaN(mid) ? '—' : fmtP(mid), true) +
+    tile('Spread', isNaN(spread) ? '—' : fmtP(spread), false) +
+    tile('Trades', fmtN(st.tradeCursor), false) +
+    tile('Events', fmtN(st.cursor), false) +
+    tile('Bid depth', fmtN(bidDepth), false, 'side-b') +
+    tile('Ask depth', fmtN(askDepth), false, 'side-s');
+
+  document.getElementById('clock').textContent =
+    `${fmtT(playTime)} / ${fmtT(rec.duration)}`;
+  const scrub = document.getElementById('scrub');
+  if (!scrub.matches(':active')) scrub.value = Math.round((playTime / rec.duration) * 10000);
+
+  if (st.tradeCursor !== lastTapeCursor) { lastTapeCursor = st.tradeCursor; renderTape(); }
+  const now = performance.now();
+  if (document.getElementById('agentTableWrap').classList.contains('on') && now - lastTableAt > 250) {
+    lastTableAt = now; renderAgentTable();
+  }
+}
+function renderTape() {
+  const rows = [];
+  for (let i = st.tradeCursor - 1; i >= Math.max(0, st.tradeCursor - 16); i--) {
+    const buyRef = rec.tSide[i] === 0 ? rec.tAgg[i] : rec.tRest[i];
+    const sellRef = rec.tSide[i] === 0 ? rec.tRest[i] : rec.tAgg[i];
+    const aggBuy = rec.tSide[i] === 0;
+    rows.push(`<tr>
+      <td class="mono">${(rec.tTs[i] / 1e6).toFixed(1)}</td>
+      <td class="${aggBuy ? 'side-b' : 'side-s'}">${aggBuy ? '▲B' : '▼S'}</td>
+      <td class="mono">${fmtN(rec.tQty[i])} @ ${rec.tPrice[i].toFixed(2)}</td>
+      <td>${agentChip(buyRef)}</td><td>${agentChip(sellRef)}</td>
+    </tr>`);
+  }
+  document.getElementById('tapeWrap').innerHTML =
+    `<table class="tape"><thead><tr><th>ms</th><th>side</th><th>fill</th><th>buyer</th><th>seller</th></tr></thead>` +
+    `<tbody>${rows.join('')}</tbody></table>`;
+}
+function agentChip(ref) {
+  const idx = rec.refToIdx.get(ref);
+  const col = idx !== undefined ? (C.strat[rec.agentStrat[idx]] || C.ink3) : C.ink3;
+  return `<span class="swatch" style="background:${col};width:8px;height:8px"></span> A${ref}`;
+}
+function renderAgentTable() {
+  const last = st.lastPidx >= 0 ? priceOf(st.lastPidx) : rec.minPrice + 1000 * rec.tick;
+  const rows = [];
+  for (let i = 0; i < rec.nAgents; i++) {
+    rows.push({ i, pnl: st.cashD[i] + st.unitsD[i] * last });
+  }
+  rows.sort((a, b) => b.pnl - a.pnl);
+  const html = rows.map(({ i, pnl }) => `<tr>
+      <td>${agentChip([...rec.refToIdx].find(([, v]) => v === i)?.[0] ?? i)} <span class="muted">${STRAT_NAMES[rec.agentStrat[i]]}</span></td>
+      <td class="mono">${fmtN(st.unitsD[i])}</td>
+      <td class="mono">${fmtP(st.cashD[i])}</td>
+      <td class="mono">${fmtP(pnl)}</td>
+    </tr>`).join('');
+  document.getElementById('agentTableWrap').innerHTML =
+    `<table class="tape"><thead><tr><th>agent</th><th>inv Δ</th><th>cash Δ</th><th>P&amp;L</th></tr></thead><tbody>${html}</tbody></table>`;
+}
+
+function drawAll() { drawLadder(); drawChart(); drawSwarm(); }
+
+/* ---------- tooltips & hover ---------- */
+const tipEl = document.getElementById('tip');
+function showTip(x, y, html) {
+  tipEl.innerHTML = html;
+  tipEl.style.display = 'block';
+  const r = tipEl.getBoundingClientRect();
+  tipEl.style.left = Math.min(x + 14, innerWidth - r.width - 8) + 'px';
+  tipEl.style.top = Math.min(y + 14, innerHeight - r.height - 8) + 'px';
+}
+function hideTip() { tipEl.style.display = 'none'; }
+
+document.getElementById('chartCanvas').addEventListener('mousemove', e => {
+  const r = e.target.getBoundingClientRect();
+  chart.hoverX = e.clientX - r.left; chart.tipX = e.clientX; chart.tipY = e.clientY;
+  requestDraw();
+});
+document.getElementById('chartCanvas').addEventListener('mouseleave', () => { chart.hoverX = -1; hideTip(); requestDraw(); });
+document.getElementById('chartCanvas').addEventListener('click', e => {
+  const r = e.target.getBoundingClientRect();
+  const t = ((e.clientX - r.left - chart.padL) / chart.iW) * rec.duration;
+  seek(t); requestDraw();
+});
+document.getElementById('ladderCanvas').addEventListener('mousemove', e => {
+  const r = e.target.getBoundingClientRect();
+  const y = e.clientY - r.top;
+  const row = ladder.rows.find(rw => y >= rw.y && y < rw.y + rw.h);
+  if (row) showTip(e.clientX, e.clientY,
+    `<b>${row.side}</b> ${row.lo === row.hi ? fmtP(priceOf(row.lo)) : fmtP(priceOf(row.lo)) + '–' + fmtP(priceOf(row.hi))}` +
+    `<br>${fmtN(row.q)} units resting`);
+  else hideTip();
+});
+document.getElementById('ladderCanvas').addEventListener('mouseleave', hideTip);
+document.getElementById('swarmCanvas').addEventListener('mousemove', e => {
+  const r = e.target.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  let best = null, bd = 24 * 24;
+  for (const d of swarm.dots) {
+    const dd = (d.x - x) ** 2 + (d.y - y) ** 2;
+    if (dd < bd) { bd = dd; best = d; }
+  }
+  if (best) {
+    const i = best.i;
+    showTip(e.clientX, e.clientY,
+      `<b>Agent ${i}</b> <span class="muted">${STRAT_NAMES[rec.agentStrat[i]]}</span><br>` +
+      `inventory Δ ${fmtN(st.unitsD[i])} · cash Δ ${fmtP(st.cashD[i])}<br>P&amp;L ${fmtP(best.pnl)}`);
+  } else hideTip();
+});
+document.getElementById('swarmCanvas').addEventListener('mouseleave', hideTip);
+
+/* ---------- controls ---------- */
+document.getElementById('playBtn').addEventListener('click', () => {
+  if (!rec) return;
+  if (playTime >= rec.duration && !playing) seek(0);
+  setPlaying(!playing);
+});
+document.getElementById('scrub').addEventListener('input', e => {
+  seek((e.target.value / 10000) * rec.duration);
+  requestDraw();
+});
+const speedEl = document.getElementById('speed');
+function updateSpeedLabel() {
+  speedMult = Math.pow(10, parseFloat(speedEl.value));
+  const total = 45 / speedMult;
+  document.getElementById('speedLabel').textContent =
+    `${speedMult.toFixed(2)}× · run ≈ ${total >= 1 ? total.toFixed(0) + 's' : (total * 1000).toFixed(0) + 'ms'}`;
+}
+speedEl.addEventListener('input', updateSpeedLabel);
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && rec && e.target.tagName !== 'INPUT') { e.preventDefault(); document.getElementById('playBtn').click(); }
+});
+document.getElementById('zoomSel').addEventListener('change', e => {
+  ladderZoom = parseInt(e.target.value, 10);
+  requestDraw();
+});
+document.getElementById('chartModeSel').addEventListener('change', e => {
+  chart.mode = e.target.value;
+  requestDraw();
+});
+document.getElementById('tableBtn').addEventListener('click', e => {
+  const wrap = document.getElementById('agentTableWrap');
+  const on = wrap.classList.toggle('on');
+  document.getElementById('swarmCanvas').classList.toggle('off', on);
+  e.target.textContent = on ? 'Dots' : 'Table';
+  if (on) renderAgentTable();
+  requestDraw();
+});
+addEventListener('resize', requestDraw);
+
+/* ---------- loading ---------- */
+function loadBuffer(buf, name) {
+  try {
+    rec = parseFile(buf, name);
+  } catch (err) {
+    alert('Could not load file: ' + err.message);
+    return;
+  }
+  st = null;
+  seek(0);
+  ladderCenter = st.lastPidx >= 0 ? st.lastPidx : 1000;
+  swarm.mX = niceCeil(Math.max(10, rec.maxInv) * 1.15);
+  swarm.mY = niceCeil(Math.max(10, rec.maxPnl) * 1.15);
+  document.getElementById('drop').style.display = 'none';
+  document.getElementById('main').classList.add('on');
+  document.getElementById('controls').classList.add('on');
+  document.getElementById('legend').style.display = 'flex';
+  document.getElementById('openBtn').style.display = 'inline-block';
+  document.getElementById('fileMeta').textContent =
+    `${name} — ${fmtN(rec.n)} events, ${fmtN(rec.nTrades)} trades, ${rec.nAgents} agents`;
+  const evps = rec.n / (rec.duration / 1e9);
+  document.getElementById('recMeta').innerHTML =
+    `${fmtN(rec.n)} events over ${fmtT(rec.duration)} of engine time ` +
+    `(≈${fmtN(Math.round(evps))} events/s)` +
+    (rec.dropped ? ` · <b>${fmtN(rec.dropped)} dropped</b>` : ' · 0 dropped');
+  updateSpeedLabel();
+  // #t=0.4 seeks to 40% and pauses — handy for sharing a moment
+  const m = location.hash.match(/t=([\d.]+)/);
+  if (m) { seek(parseFloat(m[1]) * rec.duration); setPlaying(false); }
+  else setPlaying(true);
+  requestDraw();
+}
+function loadFile(file) {
+  file.arrayBuffer().then(buf => loadBuffer(buf, file.name));
+}
+document.getElementById('filePick').addEventListener('change', e => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+});
+document.getElementById('openBtn').addEventListener('click', () => {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.mktviz';
+  inp.onchange = () => { if (inp.files[0]) loadFile(inp.files[0]); };
+  inp.click();
+});
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+// when served over http next to a recording, offer it automatically
+if (location.protocol.startsWith('http')) {
+  fetch('simulation.mktviz').then(r => r.ok ? r.arrayBuffer() : null)
+    .then(buf => { if (buf && !rec) loadBuffer(buf, 'simulation.mktviz'); })
+    .catch(() => {});
+}
+</script>

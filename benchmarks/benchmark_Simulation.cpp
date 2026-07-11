@@ -3,6 +3,7 @@
 #include "AgentStrategy.h"
 #include "AgentStrategyFactory.h"
 #include "Orderbook.h"
+#include "ThreadPin.h"
 #include "TradeDispatcher.h"
 
 #include <benchmark/benchmark.h>
@@ -49,6 +50,9 @@ static void BM_Simulation(benchmark::State &state) {
 
     std::thread t1(&MatchingEngine::Start, &matchingEngine);
     std::thread t2(&AgentManager::RunIncomingLoop, &agentManager_);
+    PinCurrentThreadToCore(1); // outgoing loop runs on the benchmark thread
+    PinThreadToCore(t1, 2);
+    PinThreadToCore(t2, 3);
 
     agentManager_.RunOutgoingLoop();
 

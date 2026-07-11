@@ -1,10 +1,13 @@
 #pragma once
 #include "Order.h"
 #include "Trade.h"
-#include <unordered_map>
+#include <vector>
 
 class Agent;
 
+// Routes TradeInfos from the matching thread to agents. Client refs are
+// dense (0..N-1), so routing is a vector index instead of a hash lookup.
+// Attach/Detach must happen before/after the matching thread runs.
 class TradeDispatcher {
 public:
   TradeDispatcher() {};
@@ -15,5 +18,8 @@ public:
   void PushTradeInfo(TradeInfo &&tradeInfo);
 
 private:
-  std::unordered_map<ClientRef, Agent *> clients_;
+  Agent *ClientFor(ClientRef clientRef) const {
+    return clientRef < clients_.size() ? clients_[clientRef] : nullptr;
+  }
+  std::vector<Agent *> clients_;
 };

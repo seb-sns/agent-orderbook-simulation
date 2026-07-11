@@ -4,6 +4,7 @@
 #include "AgentStrategyFactory.h"
 #include "OrderPool.h"
 #include "Orderbook.h"
+#include "ThreadPin.h"
 #include "TradeDispatcher.h"
 
 #include <cstddef>
@@ -16,6 +17,7 @@
 #include <stdio.h>
 
 int main() {
+  PinCurrentThreadToCore(1); // outgoing loop runs on the main thread
   for (size_t n = 16; n <= 256; n *= 2) {
     TradeDispatcher tradeDispatcher;
     OrderPool orderPool;
@@ -32,15 +34,14 @@ int main() {
     for (size_t i = 0; i < nRandom; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MakeStrategyRandom(&orderbook, &orderPool, 1),
-          i + (nRandom + nMarketMaker), momentumTraderRate));
+          MakeStrategyRandom(&orderbook, &orderPool, 1), i, randomRate));
     }
 
     for (size_t i = 0; i < nMarketMaker; ++i) {
       agentManager_.AddAgent(std::make_unique<Agent>(
           tradeDispatcher, matchingEngine,
-          MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02),
-          i + (nRandom + nMarketMaker), momentumTraderRate));
+          MakeStrategyMarketMaker(&orderbook, &orderPool, 0.02), i + nRandom,
+          marketMakerRate));
     }
 
     for (size_t i = 0; i < nMomentumTrader; ++i) {
@@ -55,6 +56,8 @@ int main() {
 
     std::thread t1(&MatchingEngine::Start, &matchingEngine);
     std::thread t2(&AgentManager::RunIncomingLoop, &agentManager_);
+    PinThreadToCore(t1, 2);
+    PinThreadToCore(t2, 3);
     auto loop_start = std::chrono::steady_clock::now();
     agentManager_.RunOutgoingLoop();
 
@@ -87,5 +90,9 @@ int main() {
     std::cout << "| Throughput (actions/s): " << std::setw(10) << std::fixed
               << std::setprecision(0) << throughput_orders_per_sec << " ops/sec"
               << std::endl;
+    std::cout << "| Throughput (orders/s): " << std::setw(10) << std::fixed
+              << std::setprecision(0)
+              << (matchingEngine.GetProcessedOrders() / duration_ms) * 1000.0
+              << " ops/sec" << std::endl;
   }
 }

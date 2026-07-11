@@ -1,15 +1,19 @@
-#include "Orderbook.h"
 #include "Order.h"
 #include "OrderPool.h"
+#include "Orderbook.h"
 #include "PriceLevel.h"
 #include "Trade.h"
 #include "TradeDispatcher.h"
+#include "VizRecorder.h"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <unistd.h>
+#include <vector>
 
 Orderbook::Orderbook(OrderPool *orderPool, TradeDispatcher &tradeDispatcher)
     : orderPool_(orderPool), tradeDispatcher_(tradeDispatcher) {};
@@ -82,8 +86,8 @@ uint64_t Orderbook::PriceToIndex(Price price) const {
   if (price > 120) {
     price = 120;
   }
-  double index = (price - min_price_) / tick_size_;
-  return static_cast<uint64_t>(std::floor(index + 1e-9));
+  double index = static_cast<uint64_t>(price * 100.0 + 0.5) - 10000;
+  return index;
 }
 
 Price Orderbook::IndexToPrice(uint64_t index) const {
@@ -98,7 +102,7 @@ Price Orderbook::IndexToPrice(uint64_t index) const {
 }
 
 void Orderbook::AddOrder(Order *order) {
-  const uint64_t &index = PriceToIndex(order->GetPrice());
+  const uint64_t index = PriceToIndex(order->GetPrice());
   const Side side = order->GetSide();
   auto &priceLevel = (side == Side::Buy) ? bids_[index] : asks_[index];
 
@@ -122,15 +126,28 @@ void Orderbook::AddOrder(Order *order) {
       setAskBit(index);
     }
   }
-  orderMap_.insert({order->GetOrderId(), poolIndex});
+  orderMap_.insert(order->GetOrderId(), poolIndex);
+  VIZ_EMIT_ADD(order->GetOrderId(), order->GetClientRef(), index,
+               order->GetRemainingQuantity(), side);
+
+  // Echo the engine-assigned order id back to the agent so it can cancel
+  // this resting order later without reading shared pool memory.
+  TradeInfo ack{.price = order->GetPrice(),
+                .orderPrice = order->GetPrice(),
+                .orderId = order->GetOrderId(),
+                .clientRef = static_cast<std::uint32_t>(order->GetClientRef()),
+                .clientSeq = static_cast<std::uint32_t>(order->GetTimestamp()),
+                .quantity = order->GetRemainingQuantity(),
+                .orderType = order->GetOrderType(),
+                .side = side,
+                .type = ExecutionType::ACK};
+  tradeDispatcher_.PushTradeInfo(std::move(ack));
 }
 
-void Orderbook::RemoveOrder(Order *order) {
-  RemoveOrderUnlocked(order);
-}
+void Orderbook::RemoveOrder(Order *order) { RemoveOrderUnlocked(order); }
 
 void Orderbook::RemoveOrderUnlocked(Order *order) {
-  const uint64_t &index = PriceToIndex(order->GetPrice());
+  const uint64_t index = PriceToIndex(order->GetPrice());
   auto &priceLevel =
       (order->GetSide() == Side::Buy) ? bids_[index] : asks_[index];
 
@@ -167,39 +184,27 @@ void Orderbook::RemoveOrderUnlocked(Order *order) {
 }
 
 void Orderbook::CancelOrder(Order *cancelOrder) {
-  const std::uint64_t &index{PriceToIndex(cancelOrder->GetPrice())};
-  if (cancelOrder->GetSide() == Side::Buy) {
-    auto &priceLevel = bids_[index];
-    const PoolIndex *ptr = orderMap_.find(cancelOrder->GetOrderId());
-    if (!ptr) {
-      return;
-    }
-    // std::cout << "[Orderbook CancelOrder] - OrderId: " <<
-    // cancelOrder->GetOrderId() << std::endl;
-    PoolIndex poolIndex = *ptr;
-    Order *order = orderPool_->get_order(poolIndex);
-    TradeInfo cancelledTrade(order->GetOrderId(), order->GetOrderType(),
-                       order->GetClientRef(), Side::Buy, order->GetPrice(),
-                       order->GetRemainingQuantity(), *order,
-                       ExecutionType::CANCEL);
-    tradeDispatcher_.PushTradeInfo(std::move(cancelledTrade));
-    RemoveOrderUnlocked(order);
-  } else {
-    auto &priceLevel = asks_[index];
-    const PoolIndex *ptr = orderMap_.find(cancelOrder->GetOrderId());
-    if (!ptr) {
-      return;
-    }
-    PoolIndex poolIndex = *ptr;
-
-    Order *order = orderPool_->get_order(poolIndex);
-    TradeInfo cancelledTrade(order->GetOrderId(), order->GetOrderType(),
-                       order->GetClientRef(), Side::Sell, order->GetPrice(),
-                       order->GetRemainingQuantity(), *order,
-                       ExecutionType::CANCEL);
-    tradeDispatcher_.PushTradeInfo(std::move(cancelledTrade));
-    RemoveOrderUnlocked(order);
+  const PoolIndex *ptr = orderMap_.find(cancelOrder->GetOrderId());
+  if (!ptr) {
+    return;
   }
+  PoolIndex poolIndex = *ptr;
+  Order *order = orderPool_->get_order(poolIndex);
+  TradeInfo cancelledTrade{
+      .price = order->GetPrice(),
+      .orderPrice = order->GetPrice(),
+      .orderId = order->GetOrderId(),
+      .clientRef = static_cast<std::uint32_t>(order->GetClientRef()),
+      .clientSeq = static_cast<std::uint32_t>(order->GetTimestamp()),
+      .quantity = order->GetRemainingQuantity(),
+      .orderType = order->GetOrderType(),
+      .side = order->GetSide(),
+      .type = ExecutionType::CANCEL};
+  tradeDispatcher_.PushTradeInfo(std::move(cancelledTrade));
+  VIZ_EMIT_CANCEL(order->GetOrderId(), order->GetClientRef(),
+                  PriceToIndex(order->GetPrice()),
+                  order->GetRemainingQuantity(), order->GetSide());
+  RemoveOrderUnlocked(order);
 }
 
 void Orderbook::FillOrder(Order *order, std::uint64_t index) {
@@ -225,92 +230,153 @@ void Orderbook::FillOrder(Order *order, std::uint64_t index) {
     matchedOrderExecutionType = ExecutionType::PARTIAL;
   }
 
+  const auto makeLeg = [&](const Order *legOrder, Side legSide,
+                           ExecutionType executionType) {
+    return TradeInfo{
+        .price = matchedOrder->GetPrice(),
+        .orderPrice = legOrder->GetPrice(),
+        .orderId = legOrder->GetOrderId(),
+        .clientRef = static_cast<std::uint32_t>(legOrder->GetClientRef()),
+        .clientSeq = static_cast<std::uint32_t>(legOrder->GetTimestamp()),
+        .quantity = filledQuantity,
+        .orderType = legOrder->GetOrderType(),
+        .side = legSide,
+        .type = executionType};
+  };
   if (order->GetSide() == Side::Buy) {
-    TradeInfo bidTrade(order->GetOrderId(), order->GetOrderType(),
-                       order->GetClientRef(), Side::Buy,
-                       matchedOrder->GetPrice(), filledQuantity, *order,
-                       orderExecutionType);
-    TradeInfo askTrade(matchedOrder->GetOrderId(), matchedOrder->GetOrderType(),
-                       matchedOrder->GetClientRef(), Side::Sell,
-                       matchedOrder->GetPrice(), filledQuantity, *matchedOrder,
-                       matchedOrderExecutionType);
-    Trade trade(askTrade, bidTrade);
+    Trade trade(makeLeg(matchedOrder, Side::Sell, matchedOrderExecutionType),
+                makeLeg(order, Side::Buy, orderExecutionType));
     tradeDispatcher_.PushTradeInfo(std::move(trade));
   } else {
-    TradeInfo bidTrade(matchedOrder->GetOrderId(), matchedOrder->GetOrderType(),
-                       matchedOrder->GetClientRef(), Side::Buy,
-                       matchedOrder->GetPrice(), filledQuantity, *matchedOrder,
-                       matchedOrderExecutionType);
-    TradeInfo askTrade(order->GetOrderId(), order->GetOrderType(),
-                       order->GetClientRef(), Side::Sell,
-                       matchedOrder->GetPrice(), filledQuantity, *order,
-                       orderExecutionType);
-    Trade trade(askTrade, bidTrade);
+    Trade trade(makeLeg(order, Side::Sell, orderExecutionType),
+                makeLeg(matchedOrder, Side::Buy, matchedOrderExecutionType));
     tradeDispatcher_.PushTradeInfo(std::move(trade));
   }
+
+  VIZ_EMIT_TRADE(matchedOrder->GetOrderId(), order->GetClientRef(),
+                 matchedOrder->GetClientRef(), index, filledQuantity,
+                 order->GetSide());
 
   if (matchedOrder->isFilled()) {
     RemoveOrderUnlocked(matchedOrder);
   }
 }
 
+// Compact end-of-run book view: the N levels closest to the touch on each
+// side, with per-level order counts and bars scaled to the largest shown
+// level. Farther levels are summarised. Colored when stdout is a terminal.
 void Orderbook::PrintBook() {
-  std::cout << "\n====== ASKS ======\n";
-  for (size_t level = MAX_PRICE_LEVELS - 1; level > 0; --level) {
-    size_t word = level / 64;
-    size_t bit = level % 64;
+  constexpr int SHOW = 12;
+  constexpr int BAR_WIDTH = 30;
 
-    uint64_t present = asks_bitmap_[word];
-    bool is_set = present & (1ULL << bit);
-    if (!is_set) {
-      continue;
-    }
-    Quantity quantity{0};
-    auto orderIndex = asks_[level].tail_;
+  const bool color = isatty(fileno(stdout)) != 0;
+  const char *RED = color ? "\033[31m" : "";
+  const char *GREEN = color ? "\033[32m" : "";
+  const char *DIM = color ? "\033[90m" : "";
+  const char *RESET = color ? "\033[0m" : "";
+
+  struct Level {
+    uint64_t index;
+    Quantity quantity;
+    int orders;
+  };
+  auto sumLevel = [&](const PriceLevel &priceLevel) {
+    Level level{0, 0, 0};
+    auto orderIndex = priceLevel.tail_;
     while (orderIndex != -1) {
       Order *order = orderPool_->get_order(orderIndex);
-      quantity += order->GetRemainingQuantity();
+      level.quantity += order->GetRemainingQuantity();
+      ++level.orders;
       orderIndex = order->GetPrev();
     }
-    std::ostringstream price;
-    price << "£" << std::fixed << std::setprecision(2) << IndexToPrice(level);
+    return level;
+  };
 
-    std::cout << std::right << std::setw(5) << quantity << " @ "
-              << std::setw(10) << price.str() << ": ";
-    for (size_t j = 0; j < quantity / 250; ++j) {
-      std::cout << "█";
+  std::vector<Level> askLevels, bidLevels;
+  std::uint64_t askUnitsBeyond = 0, bidUnitsBeyond = 0;
+  int askLevelsBeyond = 0, bidLevelsBeyond = 0;
+  for (uint64_t i = 0; i < MAX_PRICE_LEVELS; ++i) {
+    if (!(asks_bitmap_[i / 64] & (1ULL << (i % 64)))) {
+      continue;
     }
-    std::cout << '\n';
+    Level level = sumLevel(asks_[i]);
+    if (level.quantity == 0) {
+      continue;
+    }
+    level.index = i;
+    if (askLevels.size() < SHOW) {
+      askLevels.push_back(level);
+    } else {
+      ++askLevelsBeyond;
+      askUnitsBeyond += level.quantity;
+    }
+  }
+  for (uint64_t i = MAX_PRICE_LEVELS; i-- > 0;) {
+    if (!(bids_bitmap_[i / 64] & (1ULL << (i % 64)))) {
+      continue;
+    }
+    Level level = sumLevel(bids_[i]);
+    if (level.quantity == 0) {
+      continue;
+    }
+    level.index = i;
+    if (bidLevels.size() < SHOW) {
+      bidLevels.push_back(level);
+    } else {
+      ++bidLevelsBeyond;
+      bidUnitsBeyond += level.quantity;
+    }
   }
 
-  std::cout << "\n====== BIDS ======\n";
+  std::cout << "\n────────────────────── ORDERBOOK ──────────────────────\n";
+  if (askLevels.empty() && bidLevels.empty()) {
+    std::cout << "  (empty)\n\n";
+    return;
+  }
 
-  for (size_t level = MAX_PRICE_LEVELS - 1; level > 0; --level) {
-    size_t word = level / 64;
-    size_t bit = level % 64;
+  Quantity maxQuantity = 1;
+  for (const Level &level : askLevels) {
+    maxQuantity = std::max(maxQuantity, level.quantity);
+  }
+  for (const Level &level : bidLevels) {
+    maxQuantity = std::max(maxQuantity, level.quantity);
+  }
 
-    uint64_t present = bids_bitmap_[word];
-    bool is_set = present & (1ULL << bit);
-    if (!is_set) {
-      continue;
-    }
-
-    Quantity quantity{0};
-    auto orderIndex = bids_[level].tail_;
-    while (orderIndex != -1) {
-      Order *order = orderPool_->get_order(orderIndex);
-      quantity += order->GetRemainingQuantity();
-      orderIndex = order->GetPrev();
-    }
-    std::ostringstream price;
-    price << "£" << std::fixed << std::setprecision(2) << IndexToPrice(level);
-
-    std::cout << std::right << std::setw(5) << quantity << " @ "
-              << std::setw(10) << price.str() << ": ";
-    for (size_t j = 0; j < quantity / 250; ++j) {
+  auto printLevel = [&](const Level &level, const char *sideColor) {
+    const int bar = std::max<int>(
+        1, static_cast<int>(static_cast<double>(level.quantity) /
+                            maxQuantity * BAR_WIDTH));
+    std::cout << "  " << std::fixed << std::setprecision(2) << std::setw(8)
+              << IndexToPrice(level.index) << std::setw(7) << level.quantity
+              << std::setw(5) << level.orders << "  " << sideColor;
+    for (int j = 0; j < bar; ++j) {
       std::cout << "█";
     }
-    std::cout << '\n';
+    std::cout << RESET << '\n';
+  };
+
+  std::cout << DIM << "     price    qty  ord\n" << RESET;
+  if (askLevelsBeyond > 0) {
+    std::cout << DIM << "  (+" << askLevelsBeyond << " more ask levels, "
+              << askUnitsBeyond << " units above)\n" << RESET;
+  }
+  for (auto it = askLevels.rbegin(); it != askLevels.rend(); ++it) {
+    printLevel(*it, RED);
+  }
+  if (!askLevels.empty() && !bidLevels.empty()) {
+    const double bestAsk = IndexToPrice(askLevels.front().index);
+    const double bestBid = IndexToPrice(bidLevels.front().index);
+    std::cout << DIM << "  ── mid " << std::fixed << std::setprecision(3)
+              << (bestAsk + bestBid) / 2.0 << " · spread "
+              << std::setprecision(2) << (bestAsk - bestBid) << " ──\n"
+              << RESET;
+  }
+  for (const Level &level : bidLevels) {
+    printLevel(level, GREEN);
+  }
+  if (bidLevelsBeyond > 0) {
+    std::cout << DIM << "  (+" << bidLevelsBeyond << " more bid levels, "
+              << bidUnitsBeyond << " units below)\n" << RESET;
   }
   std::cout << '\n';
 }

@@ -43,7 +43,7 @@ private:
   uint64_t asks_bitmap_[BITMAP_SIZE] = {};
   std::atomic<uint64_t> bestBidIndex_{INVALID_PRICE_LEVEL_INDEX};
   std::atomic<uint64_t> bestAskIndex_{INVALID_PRICE_LEVEL_INDEX};
-  FlatHashMap<OrderId, PoolIndex> orderMap_{8'388'608};
+  FlatHashMap<OrderId, PoolIndex> orderMap_{524'288};
 
   void setBidBit(const uint64_t index);
   void setAskBit(const uint64_t index);
