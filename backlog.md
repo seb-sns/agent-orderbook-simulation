@@ -61,9 +61,10 @@ Where cycles go across the three threads, after all current optimizations:
   ns per op vs 32.6/44.9/56.3 for std::priority_queue); the calendar queue
   edges it at 62 agents but collapses at scale (352 ns at 4092) and is the
   structure class that's hardest to keep correct.
-  `include/LadderQueue.h` is kept for reference/repair — if it's fixed,
-  Pop must compare topRung's front against the earliest rung bucket, and
-  rung resets must not re-bin buckets that still hold events.
+  `include/LadderQueue.h`, `include/CalenderQueue.h` and the old
+  `benchmark_QueueLatency.cpp` were deleted (git history has them):
+  the EventQueue benchmark's correct calendar queue already showed the
+  structure class loses at scale, so repairing LadderQueue had no upside.
 
 - ~~Order-pool slot reuse race in agent cancel logic~~ — fixed by redesign:
   agents keep by-value `ActiveOrder` records keyed by an agent-local sequence

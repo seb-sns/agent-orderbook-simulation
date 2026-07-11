@@ -23,13 +23,6 @@ target_link_libraries(benchmark_agentlatency
     includes
 )
 
-add_executable(benchmark_queuelatency benchmark_QueueLatency.cpp)
-target_link_libraries(benchmark_queuelatency
-  PRIVATE
-    core
-    includes
-)
-
 add_executable(benchmark_eventqueue benchmark_EventQueue.cpp)
 target_link_libraries(benchmark_eventqueue
   PRIVATE
