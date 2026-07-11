@@ -21,9 +21,9 @@ inline AgentStrategy MakeStrategyMomentumTrader(Orderbook *orderbook,
 
 inline AgentStrategy MakeStrategyMeanReverter(Orderbook *orderbook,
                                        OrderPool *orderPool, double fairValue,
-                                       double band) {
+                                       double band, double adaptRate) {
   return AgentStrategy{std::in_place_type<MeanReverter>, orderbook, orderPool,
-                       fairValue, band};
+                       fairValue, band, adaptRate};
 }
 
 inline AgentStrategy MakeStrategyWhale(Orderbook *orderbook, OrderPool *orderPool,

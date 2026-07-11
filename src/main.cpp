@@ -56,6 +56,10 @@ int main() {
   constexpr double MOMENTUM_TRADER_THRESHOLD = 0.001; // 0.1% MA divergence
   constexpr double MEAN_REVERTER_FAIR_VALUE = 110.0;
   constexpr double MEAN_REVERTER_BAND = 0.25;
+  // EWMA weight per action pulling fair value toward the mid: at the default
+  // 3-t.u. interval this is a ~200-t.u. half-life, so a persistent repricing
+  // becomes the new fair value; 0 restores a fixed anchor at 110.
+  constexpr double MEAN_REVERTER_ADAPT_RATE = 0.01;
   constexpr Quantity WHALE_ORDER_SIZE = 100;
 
   const auto positive = [](double v) { return v > 0; };
@@ -139,7 +143,8 @@ int main() {
     agentManager_.AddAgent(std::make_unique<Agent>(
         tradeDispatcher, matchingEngine,
         MakeStrategyMeanReverter(&orderbook, &orderPool,
-                                 MEAN_REVERTER_FAIR_VALUE, MEAN_REVERTER_BAND),
+                                 MEAN_REVERTER_FAIR_VALUE, MEAN_REVERTER_BAND,
+                                 MEAN_REVERTER_ADAPT_RATE),
         i + meanReverterBase, meanReverterInterval));
   }
 
@@ -214,6 +219,18 @@ int main() {
 
   orderbook.PrintBook();
   // agentManager_.PrintStates();
-  agentManager_.PrintSummary();
+  double finalMid = 0.0;
+  const auto bestBid = orderbook.GetBestBid();
+  const auto bestAsk = orderbook.GetBestAsk();
+  if (bestBid && bestAsk) {
+    finalMid = (orderbook.IndexToPrice(*bestBid) +
+                orderbook.IndexToPrice(*bestAsk)) /
+               2.0;
+  } else if (bestBid) {
+    finalMid = orderbook.IndexToPrice(*bestBid);
+  } else if (bestAsk) {
+    finalMid = orderbook.IndexToPrice(*bestAsk);
+  }
+  agentManager_.PrintSummary(finalMid);
   return 0;
 }

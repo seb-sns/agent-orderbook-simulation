@@ -25,8 +25,6 @@ Where cycles go across the three threads, after all current optimizations:
 
 ## Ideas
 
-- Position cap / max drawdown for Mean Reverter agents so they stop averaging
-  into a level the market has permanently repriced away from fair value.
 - Price-grid boundary quirk: orders priced outside [100, 120] are clamped to a
   grid index but keep their raw price, so a trade at the boundary can print at
   a price slightly off its level's price.
@@ -37,6 +35,17 @@ Where cycles go across the three threads, after all current optimizations:
   order-event one would make the engine fully non-blocking too.
 
 ## Done (kept for context)
+
+- ~~Mean Reverters average into permanent repricings~~ — fair value now
+  drifts toward the mid by `MEAN_REVERTER_ADAPT_RATE` per action (EWMA,
+  default 0.01 ≈ 200-t.u. half-life at the default 3-t.u. interval; 0
+  restores the fixed 110 anchor). A persistent repricing becomes the new
+  fair value instead of being bought all the way to insolvency, and since
+  order sizing scales with deviation, conviction fades as fair value
+  converges. Consequence: nothing pins the long-run price at 110 anymore —
+  a big enough shock can move the market for good (chosen deliberately).
+  Position cap / max drawdown stops were considered and not needed once
+  adaptation was in.
 
 - ~~LadderQueue misordering~~ — the custom LadderQueue delivered events badly
   out of time order (147k of 2M pops in a reproduction harness, with slow

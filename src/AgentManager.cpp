@@ -94,7 +94,7 @@ void AgentManager::PrintStates() {
   }
 }
 
-void AgentManager::PrintSummary() {
+void AgentManager::PrintSummary(double finalMid) {
   auto calculateMean = [](const std::vector<double> &values) {
     if (values.empty())
       return 0.0;
@@ -115,7 +115,8 @@ void AgentManager::PrintSummary() {
 
   struct AgentData {
     std::vector<double> unitsDelta;
-    std::vector<double> profit;
+    std::vector<double> cashDelta;
+    std::vector<double> profit; // mark-to-market: cash Δ + units Δ × mid
   };
   static constexpr const char *STRATEGY_NAMES[] = {
       "Random", "Market Maker", "Momentum", "Mean Reverter", "Whale"};
@@ -126,15 +127,18 @@ void AgentManager::PrintSummary() {
     const double totalCash =
         (agent->GetAvailableCash() + agent->GetReservedCash()) / 100.0;
     AgentData &bucket = data[static_cast<std::size_t>(info.strategy_)];
-    bucket.profit.push_back(totalCash - agent->GetCash() / 100.0);
-    bucket.unitsDelta.push_back(
-        static_cast<double>(agent->GetUnits() - agent->GetInitialUnits()));
+    const double cashDelta = totalCash - agent->GetCash() / 100.0;
+    const double unitsDelta =
+        static_cast<double>(agent->GetUnits() - agent->GetInitialUnits());
+    bucket.cashDelta.push_back(cashDelta);
+    bucket.unitsDelta.push_back(unitsDelta);
+    bucket.profit.push_back(cashDelta + unitsDelta * finalMid);
   }
 
   struct Row {
     const char *name;
     std::size_t n;
-    double meanProfit, sigmaProfit, meanUnitsDelta, sigmaUnits;
+    double meanProfit, sigmaProfit, meanCashDelta, meanUnitsDelta;
   };
   std::vector<Row> rows;
   for (std::size_t i = 0; i < 5; ++i) {
@@ -144,8 +148,8 @@ void AgentManager::PrintSummary() {
     rows.push_back({STRATEGY_NAMES[i], data[i].profit.size(),
                     calculateMean(data[i].profit),
                     calculateStdDev(data[i].profit),
-                    calculateMean(data[i].unitsDelta),
-                    calculateStdDev(data[i].unitsDelta)});
+                    calculateMean(data[i].cashDelta),
+                    calculateMean(data[i].unitsDelta)});
   }
   // Leaderboard order: winners first.
   std::sort(rows.begin(), rows.end(),
@@ -174,12 +178,19 @@ void AgentManager::PrintSummary() {
 
   constexpr int BAR_WIDTH = 12;
   std::cout << "────────────────────── AGENT P&L ──────────────────────\n";
+  if (finalMid > 0) {
+    std::cout << DIM << " P&L marked to the final mid: cash Δ + units Δ × £"
+              << finalMid << '\n' << RESET;
+  } else {
+    std::cout << DIM << " Book empty at close — P&L is cash Δ only, inventory"
+                        " unvalued\n" << RESET;
+  }
   // setw counts bytes: £, σ and Δ are 2 UTF-8 bytes, so widths below are
   // padded by one per symbol to keep the visual columns aligned.
   std::cout << DIM << " " << std::left << std::setw(15) << "type" << std::right
             << std::setw(4) << "n" << std::setw(13) << "mean P&L"
-            << std::setw(13) << "σ P&L" << std::setw(12) << "units Δ"
-            << std::setw(11) << "σ units" << "  mean P&L" << '\n' << RESET;
+            << std::setw(13) << "σ P&L" << std::setw(14) << "cash Δ"
+            << std::setw(12) << "units Δ" << "  mean P&L" << '\n' << RESET;
   for (const Row &row : rows) {
     const char *pnlColor = row.meanProfit > 0.005   ? GREEN
                            : row.meanProfit < -0.005 ? RED
@@ -187,9 +198,9 @@ void AgentManager::PrintSummary() {
     std::cout << " " << std::left << std::setw(15) << row.name << std::right
               << std::setw(4) << row.n << pnlColor << std::setw(14)
               << money(row.meanProfit) << RESET << std::setw(13)
-              << money(row.sigmaProfit) << std::setw(11)
-              << signedCount(row.meanUnitsDelta) << std::setw(10)
-              << WithCommas(std::llround(row.sigmaUnits)) << "  " << pnlColor;
+              << money(row.sigmaProfit) << std::setw(14)
+              << money(row.meanCashDelta) << std::setw(11)
+              << signedCount(row.meanUnitsDelta) << "  " << pnlColor;
     // Eighth-block resolution keeps the bars linear across the whole range:
     // £1k next to £1M reads as a hairline next to a full bar, not 1 vs 12.
     static constexpr const char *EIGHTHS[] = {"", "▏", "▎", "▍",

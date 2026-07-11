@@ -25,7 +25,9 @@ public:
   std::uint64_t GetNAgentActions() const;
 
   void PrintStates();
-  void PrintSummary();
+  // finalMid values leftover inventory (mark-to-market); <= 0 means the book
+  // gave no price and P&L falls back to the cash delta alone.
+  void PrintSummary(double finalMid);
 
   std::atomic<bool> running_{false};
   double currentTime_{0};

@@ -156,7 +156,7 @@ Currently since the agent uses market orders (which will be cancelled if not fil
 <h3>
   Mean Reverter agents
 </h3>
-Mean Reverters believe the asset has a fundamental fair value (110 by default). When the mid-price falls more than a band below fair value they lift the ask, and when it rises more than the band above they hit the bid — acting as a stabilising counterweight to the Momentum Traders. Order size scales with how deep the mispricing is relative to the band (10–50 units). Resting orders that no longer express the agent's current stance (the mid moved back inside the band, or the opinion flipped) are cancelled.
+Mean Reverters believe the asset has a fundamental fair value (110 by default). When the mid-price falls more than a band below fair value they lift the ask, and when it rises more than the band above they hit the bid — acting as a stabilising counterweight to the Momentum Traders. Order size scales with how deep the mispricing is relative to the band (10–50 units). Resting orders that no longer express the agent's current stance (the mid moved back inside the band, or the opinion flipped) are cancelled. Fair value is adaptive: each action it drifts toward the current mid by a small EWMA weight (0.01 per action by default, a ~200-time-unit half-life at the default interval), so a persistent repricing is eventually accepted as the new fair value rather than averaged into indefinitely — meaning a large enough shock can move the market permanently.
 <h3>
   Whale agents
 </h3>

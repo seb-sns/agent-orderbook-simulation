@@ -218,11 +218,19 @@ static std::bernoulli_distribution cancelDist =
     std::bernoulli_distribution(0.05);
 
 MeanReverter::MeanReverter(Orderbook *orderbook, OrderPool *orderPool,
-                           double fairValue, double band)
+                           double fairValue, double band, double adaptRate)
     : orderbook_(orderbook), orderPool_(orderPool), fairValue_(fairValue),
-      band_(band) {};
+      band_(band), adaptRate_(adaptRate) {};
 
 OrderPtrs MeanReverter::Act(Agent *agent) {
+  auto bestBidIndex = orderbook_->GetBestBid();
+  auto bestAskIndex = orderbook_->GetBestAsk();
+  if (bestBidIndex && bestAskIndex) {
+    const double mid = (orderbook_->IndexToPrice(*bestBidIndex) +
+                        orderbook_->IndexToPrice(*bestAskIndex)) /
+                       2.0;
+    fairValue_ += adaptRate_ * (mid - fairValue_);
+  }
   OrderPtrs orders{CancelOrders(agent)};
   OrderPtrs activeOrders{CreateOrders(agent)};
   orders.insert(orders.end(), activeOrders.begin(), activeOrders.end());

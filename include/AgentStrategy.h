@@ -67,11 +67,14 @@ private:
 // Fundamentalist: believes the asset has a fair value and fades deviations —
 // lifts the ask when the mid drops below fairValue - band, hits the bid when
 // it rises above fairValue + band. Cancels resting orders once the mid is
-// back inside the band (or its stance flips).
+// back inside the band (or its stance flips). Fair value itself drifts
+// toward the mid by adaptRate per action (EWMA), so a persistent repricing
+// is eventually accepted as the new fair value instead of being averaged
+// into until the agent is broke; adaptRate 0 keeps it fixed.
 class MeanReverter {
 public:
   MeanReverter(Orderbook *orderbook, OrderPool *orderPool, double fairValue,
-               double band);
+               double band, double adaptRate);
 
   MeanReverter(const MeanReverter &) = delete;
   MeanReverter &operator=(const MeanReverter &) = delete;
@@ -86,6 +89,7 @@ public:
 private:
   double fairValue_;
   double band_;
+  double adaptRate_;
   Orderbook *orderbook_;
   OrderPool *orderPool_;
 };
