@@ -123,8 +123,6 @@ When benchmarking 5'000'000 orders (50/50 limit/market, quantities 1–20) with 
   - **average latency of ~110ns**
   - **99.99% percentile orders at ~10'000ns**
 
-(Earlier reported figures of ~8.5M ops/sec came from a benchmark bug: trade dispatch was silently dropped, negative random quantities wrapped to ~4-billion-unit resting walls that made matching trivially cheap, and cancels targeted ids that could never match. The benchmark now streams orders, clamps quantities, cancels real resting orders and drains the trade path.)
-
 <p align="center">
   <img src="images/orderlatency.png">
 </p>
@@ -182,13 +180,3 @@ All benchmarks were run on the following system:
   - 16GB DDR3 RAM
 
 Benchmark threads are pinned to distinct physical cores (outgoing→cpu1, matching engine→cpu2, incoming→cpu3, see <code>include/ThreadPin.h</code>). For stable numbers run the suite through <code>sudo benchmarks/run_benchmarks.sh</code>, which sets the CPU governor to <code>performance</code> for the duration (add <code>--no-turbo</code> to also pin the clock below turbo) and restores your previous settings on exit.
-    
-<h2>
-  Further improvements
-</h2>
-- The benchmark for Agent latency is currently very noisy
-
-- Agents use an unoptimized data structure (std::unordered_map) to keep track of active orders. This becomes an expensive operation when scanning through active orders deciding on what to cancel. A more opitmized structure may want to split out active orders by bids and asks, further by organizing by price the agent would be able to quickly cancel orders in bulk by removing orders above or below a given price.
-  
-- All agents are stored within a single agent manager within a single container of Agents- there could be performance improvements from not having to containerize all agents (who have different strategies),
-(a possible design difference would be to have each type of agent using a different thread to act rather than all being on the same thread), in addtion there could be a speed up through batch processing of agent actions (the disadvantage of batch processing actions is that each agent in a batch ends up with the same view of the orderbook then when acting in sequeunce)
