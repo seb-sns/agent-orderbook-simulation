@@ -56,6 +56,8 @@ You can run the simulation directly from the build directory, if you wish to ben
     build/simulation
 
 The simulation asks a short series of questions (agent counts, action intervals, run length); every question shows a sensible default in brackets, so pressing Enter through all of them gives a good demo run.
+
+At the end of the run a per-strategy P&L leaderboard is printed, marking each agent's inventory to the final mid price (mean and standard deviation of P&L, plus mean cash and unit deltas per strategy).
     
 <h4>
   Benchmarks
@@ -185,8 +187,6 @@ Benchmark threads are pinned to distinct physical cores (outgoing→cpu1, matchi
   Further improvements
 </h2>
 - The benchmark for Agent latency is currently very noisy
-
-- Agents could improve on their logic by taking into account market volatility, Market Makers may want to adjust their spread during high volatility for example.
 
 - Agents use an unoptimized data structure (std::unordered_map) to keep track of active orders. This becomes an expensive operation when scanning through active orders deciding on what to cancel. A more opitmized structure may want to split out active orders by bids and asks, further by organizing by price the agent would be able to quickly cancel orders in bulk by removing orders above or below a given price.
   
