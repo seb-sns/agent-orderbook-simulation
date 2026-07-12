@@ -18,7 +18,7 @@
   - Multithreaded simulation architecture
   - L3 FIFO orderbook with O(1) best bid/ask lookup
   - Custom order pool to minimize allocations
-  - Benchmarked at ~4.4M ops/sec with ~76ns median latency
+  - Benchmarked at ~4.6M ops/sec with ~60ns median latency
   - Browser-based record + replay visualizer with zero overhead in the normal build
 
 <h2>
@@ -118,9 +118,9 @@ This is an L3 implimentation of an orderbook, where we store individual orders a
 </h3>
 
 When benchmarking 5'000'000 orders (50/50 limit/market, quantities 1–20) with an additional ~250'000 cancellations of real resting orders, the orderbook achieves:
-  - **~4.4M operations per second**
-  - **median latency of ~76ns**
-  - **average latency of ~110ns**
+  - **~4.6M operations per second**
+  - **median latency of ~60ns**
+  - **average latency of ~80ns**
   - **99.99% percentile orders at ~10'000ns**
 
 <p align="center">
@@ -168,7 +168,7 @@ Whales submit a single large market order on a random side each time they act, s
   Agent benchmarks
 </h3>
 
-A benchmark to measure performance of agents and their interactions with the orderbook is available and measures at increasing numbers of each type of agent: currently ~2–3.5M agent actions per second (~4–5M orders/s through the engine), roughly flat from 48 to 768 agents.
+A benchmark to measure performance of agents and their interactions with the orderbook is available and measures at increasing numbers of each type of agent: currently ~2.3–3.4M agent actions per second (~3.2–3.7M orders/s through the engine) from 48 to 768 agents, with actions/s declining gently as the agent count grows.
   
 <h3>
   Benchmarking information
